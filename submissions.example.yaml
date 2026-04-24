@@ -1,0 +1,36 @@
+# Submissions config for `npm run bench -- score-all`.
+#
+# Copy to `submissions.yaml` and fill in one entry per (tool, prompt, run) that
+# you want to score. Each entry is a sitebuilder's deployed preview URL — you
+# drive the tool's UI manually, then record the URL here.
+#
+# Schema is validated at load time. Run `npm run bench -- score-all` to:
+#   1. Record each entry as a submission under artifacts/{tool}/{prompt}/{run}/
+#   2. Run all deterministic scorers against each URL
+#   3. Regenerate leaderboard.html
+#
+# Only `tool`, `prompt`, and `url` are required. Everything else is optional
+# user-reported metadata (folded into the Cost scorer).
+
+schema: 1
+runs:
+  - tool: lovable
+    prompt: nimbus-notes-landing
+    url: https://example-nimbus-abc.lovable.app/
+    # Optional:
+    # runIdx: 0
+    # toolVersion: 2026-W17
+    # promptSubmittedAt: 2026-04-24T18:00:00Z
+    # firstRenderAt:    2026-04-24T18:00:45Z
+    # workingBuildAt:   2026-04-24T18:01:10Z
+    # credits: 5
+    # usd: 0.30
+    # note: first pass, no iteration
+
+  - tool: v0
+    prompt: nimbus-notes-landing
+    url: https://nimbus-v0.vercel.app/
+
+  - tool: replit
+    prompt: nimbus-notes-landing
+    url: https://nimbus-notes.your-handle.repl.co/

@@ -5,6 +5,9 @@ artifacts/
 .DS_Store
 .env
 .env.local
+.auth/
+leaderboard.html
+submissions.yaml
 coverage/
 playwright-report/
 test-results/

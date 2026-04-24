@@ -20,12 +20,15 @@ must_have:
     assert: "toBeVisible"
 
 should_have:
-  - id: feature_cards_count
-    locator: "getByTestId('feature')"
-    assert: "toHaveCount(3)"
-  - id: testimonials_count
-    locator: "getByTestId('testimonial')"
-    assert: "toHaveCount(3)"
+  # At least 3 subheadings (h2s) — proxy for "three-feature grid" without
+  # requiring a specific markup style that varies per tool.
+  - id: feature_subheadings
+    locator: "locator('h2')"
+    assert: "toHaveCountAtLeast(3)"
+  # At least 3 block-quote style elements — proxy for "testimonials (3 placeholders)".
+  - id: testimonials_present
+    locator: "locator('blockquote, [role=\"blockquote\"]')"
+    assert: "toHaveCountAtLeast(3)"
 
 verbatim_constraints:
   - type: exact_copy

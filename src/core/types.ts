@@ -1,4 +1,19 @@
-export type ToolName = 'lovable' | 'replit' | 'same-new';
+export type ToolName =
+  | 'lovable'
+  | 'replit'
+  | 'same-new'
+  | 'v0'
+  | 'bolt'
+  | 'claude-artifacts';
+
+export const ALL_TOOLS: readonly ToolName[] = [
+  'lovable',
+  'replit',
+  'same-new',
+  'v0',
+  'bolt',
+  'claude-artifacts',
+];
 
 export interface Prompt {
   id: string;
@@ -35,53 +50,14 @@ export type SeoCheck =
   | 'robots_txt'
   | 'sitemap_xml';
 
-export interface RunContext {
-  runIdx: number;
-  artifactDir: string;
-  startedAt: Date;
-}
-
-export interface TimingData {
-  promptSubmittedAt: string;
+export interface UserReportedTiming {
+  promptSubmittedAt?: string;
   firstRenderAt?: string;
   workingBuildAt?: string;
-  completedAt: string;
-  ttfrMs?: number;
-  ttwbMs?: number;
-  totalMs: number;
 }
 
-export interface UsageData {
+export interface UserReportedCost {
   credits?: number;
-  tokens?: number;
   usdEstimate?: number;
-  raw?: Record<string, unknown>;
-}
-
-export type TranscriptEvent =
-  | { t: string; kind: 'prompt_sent'; text: string }
-  | { t: string; kind: 'tool_output'; text: string }
-  | { t: string; kind: 'artifact_url'; url: string }
-  | { t: string; kind: 'error'; message: string; fatal: boolean };
-
-export interface RunResult {
-  artifactUrl?: string;
-  sourcePath?: string;
-  usage?: UsageData;
-  timing: TimingData;
-  transcript: TranscriptEvent[];
-}
-
-export interface HealthCheckResult {
-  ok: boolean;
-  artifactUrl?: string;
-  durationMs: number;
-  message?: string;
-}
-
-export interface Adapter {
-  readonly name: ToolName;
-  readonly version: string;
-  healthCheck(): Promise<HealthCheckResult>;
-  submit(prompt: Prompt, ctx: RunContext): Promise<RunResult>;
+  notes?: string;
 }

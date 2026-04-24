@@ -10,13 +10,14 @@
   },
   "scripts": {
     "typecheck": "tsc",
-    "health": "tsx scripts/health-check.ts",
-    "bench": "tsx src/cli.ts",
-    "report": "tsx src/report/generate.ts"
+    "bench": "tsx src/cli.ts"
   },
   "dependencies": {
+    "@axe-core/playwright": "^4.11.2",
     "@playwright/test": "^1.49.1",
+    "chrome-launcher": "^1.2.1",
     "commander": "^12.1.0",
+    "lighthouse": "^13.1.0",
     "yaml": "^2.6.1",
     "zod": "^3.24.1"
   },
