@@ -1,0 +1,28 @@
+{
+  "name": "@modelence/benchmark",
+  "version": "0.1.0",
+  "description": "Reproducible open-source benchmark for AI sitebuilder products",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc",
+    "health": "tsx scripts/health-check.ts",
+    "bench": "tsx src/cli.ts",
+    "report": "tsx src/report/generate.ts"
+  },
+  "dependencies": {
+    "@playwright/test": "^1.49.1",
+    "commander": "^12.1.0",
+    "yaml": "^2.6.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.10",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  }
+}

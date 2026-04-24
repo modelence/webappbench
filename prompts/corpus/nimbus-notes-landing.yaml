@@ -1,0 +1,43 @@
+id: nimbus-notes-landing
+tier: 1
+prompt: |
+  Build a one-page landing site for 'Nimbus Notes', a minimalist note-taking app.
+  Include a hero with a headline, sub-headline, and primary CTA labelled exactly
+  "Get started"; a three-feature grid; testimonials (3 placeholders); and a sticky
+  top nav with logo text "Nimbus Notes" and a "Get started" button.
+  Palette: warm off-white background, near-black text, one accent color of your choice.
+
+must_have:
+  - id: hero_h1_present
+    locator: "getByRole('heading', { level: 1 })"
+    assert: "toBeVisible"
+  - id: cta_above_fold
+    locator: "getByRole('button', { name: /get started/i })"
+    assert: "toBeVisible"
+    custom: "boundingBox.y < 800"
+  - id: sticky_nav
+    locator: "getByRole('navigation')"
+    assert: "toBeVisible"
+
+should_have:
+  - id: feature_cards_count
+    locator: "getByTestId('feature')"
+    assert: "toHaveCount(3)"
+  - id: testimonials_count
+    locator: "getByTestId('testimonial')"
+    assert: "toHaveCount(3)"
+
+verbatim_constraints:
+  - type: exact_copy
+    value: "Get started"
+    where: "primary CTA button label"
+  - type: exact_copy
+    value: "Nimbus Notes"
+    where: "nav logo, hero headline"
+
+seo_applicable:
+  - title
+  - meta_description
+  - og_tags
+  - lang
+  - heading_hierarchy
