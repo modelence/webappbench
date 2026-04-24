@@ -119,25 +119,26 @@ program
   .description('Run all scorers against a submission directory')
   .argument('<dir>', 'Submission directory (contains submission.json + prompt.json)')
   .action(async (dir: string) => {
-    const { results } = await scoreSubmission(dir);
-    console.log(`\nScored: ${dir}\n`);
-    const header = ['Scorer', 'Passed', 'Score', 'Notes'];
-    const rows = Object.values(results).map((r) => [
-      r.scorer,
-      r.passed === null ? 'N/A' : r.passed ? 'yes' : 'NO',
-      r.score === null ? 'N/A' : r.score.toFixed(3),
-      (r.notes ?? extractError(r.details) ?? '').slice(0, 60),
-    ]);
-    const widths = header.map((h, i) =>
-      Math.max(h.length, ...rows.map((row) => row[i]!.length)),
-    );
-    const pad = (s: string, n: number): string => s.padEnd(n);
-    console.log(header.map((h, i) => pad(h, widths[i]!)).join('  '));
-    console.log(widths.map((w) => '-'.repeat(w)).join('  '));
-    for (const row of rows) {
-      console.log(row.map((cell, i) => pad(cell, widths[i]!)).join('  '));
-    }
+    console.log(`Scoring ${dir}`);
+    await scoreSubmission(dir, {
+      onProgress: (e) => {
+        if (e.kind === 'scorer_start') {
+          process.stdout.write(`  ${e.name.padEnd(5)} running…`);
+        } else {
+          const pass = e.result.passed === null ? 'N/A' : e.result.passed ? 'yes' : 'NO ';
+          const score = e.result.score === null ? '  N/A' : e.result.score.toFixed(3);
+          const elapsed = formatElapsedForCli(e.elapsedMs);
+          process.stdout.write(`\r  ${e.name.padEnd(5)} ${pass}   ${score}   ${elapsed}\n`);
+        }
+      },
+    });
   });
+
+function formatElapsedForCli(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const s = ms / 1000;
+  return s < 60 ? `${s.toFixed(1)}s` : `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
+}
 
 interface ScoreAllOptions {
   config: string;
@@ -172,11 +173,6 @@ program
     }
     if (failed > 0) process.exitCode = 1;
   });
-
-function extractError(details: Record<string, unknown>): string | undefined {
-  const err = details['error'];
-  return typeof err === 'string' ? err : undefined;
-}
 
 program
   .command('report')

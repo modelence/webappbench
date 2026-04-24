@@ -19,7 +19,18 @@ export interface ScoreOutput {
   results: Record<string, ScorerResult>;
 }
 
-export async function scoreSubmission(artifactDir: string): Promise<ScoreOutput> {
+export interface ScoreOptions {
+  onProgress?: (event: ProgressEvent) => void;
+}
+
+export type ProgressEvent =
+  | { kind: 'scorer_start'; name: string }
+  | { kind: 'scorer_done'; name: string; elapsedMs: number; result: ScorerResult };
+
+export async function scoreSubmission(
+  artifactDir: string,
+  opts: ScoreOptions = {},
+): Promise<ScoreOutput> {
   const submission = await readSubmission(join(artifactDir, 'submission.json'));
   const prompt = JSON.parse(await readFile(join(artifactDir, 'prompt.json'), 'utf8')) as Prompt;
   const paths = artifactPaths('artifacts', submission.tool, submission.promptId, submission.runIdx);
@@ -39,17 +50,29 @@ export async function scoreSubmission(artifactDir: string): Promise<ScoreOutput>
   const ctx: ScorerContext = { submission, prompt, paths, page };
   const results: Record<string, ScorerResult> = {};
 
+  const runScorer = async (
+    name: string,
+    fn: () => Promise<ScorerResult>,
+  ): Promise<ScorerResult> => {
+    opts.onProgress?.({ kind: 'scorer_start', name });
+    const started = Date.now();
+    const result = await fn();
+    const elapsedMs = Date.now() - started;
+    opts.onProgress?.({ kind: 'scorer_done', name, elapsedMs, result });
+    return result;
+  };
+
   try {
-    results['f1'] = await runF1(ctx);
+    results['f1'] = await runScorer('f1', () => runF1(ctx));
     if (results['f1']?.passed) {
-      results['f2'] = await runF2(ctx);
+      results['f2'] = await runScorer('f2', () => runF2(ctx));
       await page.screenshot({ path: join(paths.screenshots, 'post-interaction.png'), fullPage: true }).catch(() => undefined);
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2)).catch(() => undefined);
       await page.waitForTimeout(500);
       await page.screenshot({ path: join(paths.screenshots, 'mid-scroll.png'), fullPage: false }).catch(() => undefined);
-      results['c3'] = await runC3(ctx);
-      results['c9'] = await runC9(ctx);
-      results['c4'] = await runC4(ctx);
+      results['c3'] = await runScorer('c3', () => runC3(ctx));
+      results['c9'] = await runScorer('c9', () => runC9(ctx));
+      results['c4'] = await runScorer('c4', () => runC4(ctx));
     } else {
       const skip: ScorerResult = {
         scorer: 'skipped',
@@ -63,7 +86,7 @@ export async function scoreSubmission(artifactDir: string): Promise<ScoreOutput>
       results['c4'] = { ...skip, scorer: 'c4', version: C4_VERSION };
       results['c9'] = { ...skip, scorer: 'c9', version: C9_VERSION };
     }
-    results['cost'] = await runCost(submission, paths);
+    results['cost'] = await runScorer('cost', () => runCost(submission, paths));
   } finally {
     await context.close();
     await browser.close();

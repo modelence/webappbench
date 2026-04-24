@@ -10,6 +10,22 @@ interface SeoCheckOutcome {
   detail?: string;
 }
 
+// DOM facts extracted once via page.evaluate — avoids per-lookup 30s actionTimeouts
+// from Playwright locators when an element is missing.
+interface DomFacts {
+  title: string;
+  metaDescription: string | null;
+  canonical: string | null;
+  ogTitle: string | null;
+  ogDescription: string | null;
+  ogType: string | null;
+  twitterCard: string | null;
+  jsonLdCount: number;
+  htmlLang: string | null;
+  h1Count: number;
+  headingLevels: number[];
+}
+
 export async function runC9(ctx: ScorerContext): Promise<ScorerResult> {
   const start = Date.now();
   try {
@@ -24,16 +40,17 @@ export async function runC9(ctx: ScorerContext): Promise<ScorerResult> {
       };
     }
 
+    const facts = await collectDomFacts(ctx);
     const outcomes: SeoCheckOutcome[] = [];
     for (const check of applicable) {
-      outcomes.push(await runCheck(ctx, check));
+      outcomes.push(await runCheck(check, facts, ctx.submission.artifactUrl));
     }
 
     const passed = outcomes.filter((o) => o.passed).length;
     const total = outcomes.length;
     const score = total === 0 ? null : passed / total;
 
-    await writeJson(ctx.paths.seo, { applicable, outcomes });
+    await writeJson(ctx.paths.seo, { applicable, outcomes, facts });
 
     return {
       scorer: 'c9',
@@ -61,66 +78,94 @@ export async function runC9(ctx: ScorerContext): Promise<ScorerResult> {
   }
 }
 
-async function runCheck(ctx: ScorerContext, check: SeoCheck): Promise<SeoCheckOutcome> {
-  const { page } = ctx;
+async function collectDomFacts(ctx: ScorerContext): Promise<DomFacts> {
+  // NOTE: keep this callback self-contained (no nested fn/arrow helpers).
+  // tsx/esbuild injects a `__name` helper for named functions that Playwright
+  // cannot transport into the browser context.
+  return ctx.page.evaluate<DomFacts>(() => {
+    const headingNodes = document.querySelectorAll('h1,h2,h3,h4,h5,h6');
+    const headings: number[] = [];
+    for (const n of Array.from(headingNodes)) {
+      headings.push(Number(n.tagName.slice(1)));
+    }
+    return {
+      title: (document.title || '').trim(),
+      metaDescription:
+        document.querySelector('meta[name="description"]')?.getAttribute('content') ?? null,
+      canonical:
+        document.querySelector('link[rel="canonical"]')?.getAttribute('href') ?? null,
+      ogTitle:
+        document.querySelector('meta[property="og:title"]')?.getAttribute('content') ?? null,
+      ogDescription:
+        document.querySelector('meta[property="og:description"]')?.getAttribute('content') ?? null,
+      ogType:
+        document.querySelector('meta[property="og:type"]')?.getAttribute('content') ?? null,
+      twitterCard:
+        document.querySelector('meta[name="twitter:card"]')?.getAttribute('content') ?? null,
+      jsonLdCount: document.querySelectorAll('script[type="application/ld+json"]').length,
+      htmlLang: document.documentElement.getAttribute('lang'),
+      h1Count: document.querySelectorAll('h1').length,
+      headingLevels: headings,
+    };
+  });
+}
+
+async function runCheck(
+  check: SeoCheck,
+  f: DomFacts,
+  baseUrl: string,
+): Promise<SeoCheckOutcome> {
   switch (check) {
     case 'title': {
-      const title = (await page.title()).trim();
-      const passed = title.length >= 10 && title.length <= 70 && !/untitled|document/i.test(title);
-      return { check, passed, detail: title };
+      const passed = f.title.length >= 10 && f.title.length <= 70 && !/untitled|document/i.test(f.title);
+      return { check, passed, detail: f.title || 'missing' };
     }
     case 'meta_description': {
-      const content = await page.locator('meta[name="description"]').first().getAttribute('content').catch(() => null);
-      const passed = !!content && content.trim().length >= 50 && content.trim().length <= 300;
-      return { check, passed, detail: content ?? 'missing' };
+      const d = (f.metaDescription ?? '').trim();
+      const passed = d.length >= 50 && d.length <= 300;
+      return { check, passed, detail: f.metaDescription ?? 'missing' };
     }
     case 'canonical': {
-      const href = await page.locator('link[rel="canonical"]').first().getAttribute('href').catch(() => null);
-      return { check, passed: !!href && /^https?:\/\//.test(href), detail: href ?? 'missing' };
+      const passed = !!f.canonical && /^https?:\/\//.test(f.canonical);
+      return { check, passed, detail: f.canonical ?? 'missing' };
     }
     case 'og_tags': {
-      const required = ['og:title', 'og:description', 'og:type'];
       const missing: string[] = [];
-      for (const prop of required) {
-        const content = await page.locator(`meta[property="${prop}"]`).first().getAttribute('content').catch(() => null);
-        if (!content) missing.push(prop);
-      }
-      return { check, passed: missing.length === 0, detail: missing.length === 0 ? 'ok' : `missing: ${missing.join(', ')}` };
+      if (!f.ogTitle) missing.push('og:title');
+      if (!f.ogDescription) missing.push('og:description');
+      if (!f.ogType) missing.push('og:type');
+      return {
+        check,
+        passed: missing.length === 0,
+        detail: missing.length === 0 ? 'ok' : `missing: ${missing.join(', ')}`,
+      };
     }
     case 'twitter_card': {
-      const content = await page.locator('meta[name="twitter:card"]').first().getAttribute('content').catch(() => null);
-      return { check, passed: !!content, detail: content ?? 'missing' };
+      return { check, passed: !!f.twitterCard, detail: f.twitterCard ?? 'missing' };
     }
     case 'json_ld': {
-      const count = await page.locator('script[type="application/ld+json"]').count();
-      return { check, passed: count > 0, detail: `${count} block(s)` };
+      return { check, passed: f.jsonLdCount > 0, detail: `${f.jsonLdCount} block(s)` };
     }
     case 'lang': {
-      const lang = await page.locator('html').first().getAttribute('lang').catch(() => null);
-      return { check, passed: !!lang && lang.length >= 2, detail: lang ?? 'missing' };
+      const passed = !!f.htmlLang && f.htmlLang.length >= 2;
+      return { check, passed, detail: f.htmlLang ?? 'missing' };
     }
     case 'heading_hierarchy': {
-      const h1Count = await page.locator('h1').count();
-      const levels = await page.evaluate(() =>
-        Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6')).map((n) => Number(n.tagName.slice(1))),
-      );
-      const skipped = detectSkippedLevels(levels);
-      const passed = h1Count === 1 && !skipped;
+      const skipped = detectSkippedLevels(f.headingLevels);
+      const passed = f.h1Count === 1 && !skipped;
       return {
         check,
         passed,
-        detail: `h1Count=${h1Count}, skippedLevel=${skipped ? 'yes' : 'no'}, sequence=[${levels.join(',')}]`,
+        detail: `h1Count=${f.h1Count}, skippedLevel=${skipped ? 'yes' : 'no'}, sequence=[${f.headingLevels.join(',')}]`,
       };
     }
     case 'robots_txt': {
-      const url = new URL('/robots.txt', ctx.submission.artifactUrl).toString();
-      const ok = await headOk(url);
-      return { check, passed: ok, detail: url };
+      const url = new URL('/robots.txt', baseUrl).toString();
+      return { check, passed: await headOk(url), detail: url };
     }
     case 'sitemap_xml': {
-      const url = new URL('/sitemap.xml', ctx.submission.artifactUrl).toString();
-      const ok = await headOk(url);
-      return { check, passed: ok, detail: url };
+      const url = new URL('/sitemap.xml', baseUrl).toString();
+      return { check, passed: await headOk(url), detail: url };
     }
   }
 }
@@ -136,8 +181,14 @@ function detectSkippedLevels(levels: number[]): boolean {
 
 async function headOk(url: string): Promise<boolean> {
   try {
-    const res = await fetch(url, { method: 'HEAD', redirect: 'follow' });
-    return res.ok;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5_000);
+    try {
+      const res = await fetch(url, { method: 'HEAD', redirect: 'follow', signal: controller.signal });
+      return res.ok;
+    } finally {
+      clearTimeout(timer);
+    }
   } catch {
     return false;
   }

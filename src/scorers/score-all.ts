@@ -30,9 +30,7 @@ export async function scoreAll(opts: BatchOptions): Promise<BatchOutcome[]> {
     console.log(`\n→ ${label}  ${entry.url}`);
     const outcome = await runOne(entry, opts);
     outcomes.push(outcome);
-    if (outcome.ok) {
-      logScorerTable(outcome.scores ?? {});
-    } else {
+    if (!outcome.ok) {
       console.error(`  failed: ${outcome.error}`);
     }
   }
@@ -56,7 +54,18 @@ async function runOne(
       corpusDir: opts.corpusDir,
       artifactsRoot: opts.artifactsRoot,
     });
-    const { results } = await scoreSubmission(paths.root);
+    const { results } = await scoreSubmission(paths.root, {
+      onProgress: (e) => {
+        if (e.kind === 'scorer_start') {
+          process.stdout.write(`  ${e.name.padEnd(5)} running…`);
+        } else {
+          const pass = e.result.passed === null ? 'N/A' : e.result.passed ? 'yes' : 'NO ';
+          const score = e.result.score === null ? '  N/A' : e.result.score.toFixed(3);
+          const elapsed = formatElapsed(e.elapsedMs);
+          process.stdout.write(`\r  ${e.name.padEnd(5)} ${pass}   ${score}   ${elapsed}\n`);
+        }
+      },
+    });
     return {
       tool: entry.tool,
       promptId: entry.prompt,
@@ -94,10 +103,8 @@ function costFromEntry(e: SubmissionConfigEntry): UserReportedCost | undefined {
   return Object.keys(c).length > 0 ? c : undefined;
 }
 
-function logScorerTable(results: Record<string, ScorerResult>): void {
-  for (const r of Object.values(results)) {
-    const pass = r.passed === null ? 'N/A' : r.passed ? 'yes' : 'NO';
-    const score = r.score === null ? 'N/A' : r.score.toFixed(3);
-    console.log(`  ${r.scorer.padEnd(5)}  ${pass.padEnd(4)}  ${score}`);
-  }
+function formatElapsed(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const s = ms / 1000;
+  return s < 60 ? `${s.toFixed(1)}s` : `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
 }
