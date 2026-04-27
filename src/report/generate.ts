@@ -109,22 +109,22 @@ function summarizeByTool(runs: RunSummary[]): Map<string, ToolAgg> {
 }
 
 const METRIC_META: Record<string, { label: string; group: string; desc: string }> = {
-  f1: { label: 'F1 Render',      group: 'Functional',    desc: 'Page loads with HTTP 2xx and non-empty body within 30 s. The baseline — a failing site scores 0 on all downstream metrics.' },
-  f2: { label: 'F2 Acceptance',  group: 'Functional',    desc: 'Per-prompt checklist of must-have and should-have requirements, executed as Playwright assertions (roles, labels, counts). Weighted: must-have failures penalise more than should-have.' },
-  f5: { label: 'F5 Errors',      group: 'Functional',    desc: 'Console errors, uncaught JS exceptions, and 4xx/5xx network responses collected during the full scoring session. 0 errors = 1.0; decays linearly to 0 at 10+ errors.' },
-  f6: { label: 'F6 Verbatim',    group: 'Functional',    desc: 'Exact string constraints specified in the prompt (e.g. "Get started", "Nimbus Notes") must appear verbatim in the rendered page. Source-only scorer.' },
-  c1: { label: 'C1 Lint',        group: 'Code Quality',  desc: 'ESLint with typescript-eslint recommended rules run over the source ZIP. Score decays linearly from 0 errors/1k LOC (1.0) to 20+ errors/1k LOC (0). Source-only.' },
-  c2: { label: 'C2 Types',       group: 'Code Quality',  desc: 'tsc --noEmit --strict run on the source. 0 type errors = 1.0; decays at 20 errors/1k LOC. "Cannot find module" errors are filtered out. Source-only.' },
-  c3: { label: 'C3 A11y',        group: 'Code Quality',  desc: 'axe-core WCAG 2.1/2.2 AA audit. Score = 1 − (violations / (violations + passes)); weighted by violation impact (critical > serious > moderate > minor).' },
-  c4: { label: 'C4 Perf',        group: 'Code Quality',  desc: 'Lighthouse performance score (mobile throttled, median of 3 runs). Composite of FCP, LCP, TBT, CLS, Speed Index.' },
-  c5: { label: 'C5 Bundle',      group: 'Code Quality',  desc: 'Uncompressed JS + CSS source size. Full marks up to 150 KB; linear penalty up to 1 MB; 0 above 1 MB. Source-only. Does not account for tree-shaking.' },
-  c6: { label: 'C6 Complexity',  group: 'Code Quality',  desc: 'Cognitive complexity via eslint-plugin-sonarjs. Functions exceeding threshold 15 are flagged. Score decays from 0 violations/1k LOC (1.0) to 10+/1k (0). Source-only.' },
-  c7: { label: 'C7 Audit',       group: 'Code Quality',  desc: 'npm audit CVE count from the source lockfile. Weighted: critical×10 + high×3 + moderate×1 + low×0.1. Score decays to 0 at 20 weighted penalty points. Source-only.' },
-  c8: { label: 'C8 Secrets',     group: 'Code Quality',  desc: 'Regex scan for leaked credentials: OpenAI/Anthropic API keys, AWS access keys, GitHub PATs, PEM headers, hardcoded passwords. Any match = 0. Source-only.' },
+  f1: { label: 'F1 render',      group: 'Functional',    desc: 'Page loads with HTTP 2xx and non-empty body within 30 s. The baseline — a failing site scores 0 on all downstream metrics.' },
+  f2: { label: 'F2 acceptance',  group: 'Functional',    desc: 'Per-prompt checklist of must-have and should-have requirements, executed as Playwright assertions (roles, labels, counts). Weighted: must-have failures penalise more than should-have.' },
+  f5: { label: 'F5 errors',      group: 'Functional',    desc: 'Console errors, uncaught JS exceptions, and 4xx/5xx network responses collected during the full scoring session. 0 errors = 1.0; decays linearly to 0 at 10+ errors.' },
+  f6: { label: 'F6 verbatim',    group: 'Functional',    desc: 'Exact string constraints specified in the prompt (e.g. "Get started", "Nimbus Notes") must appear verbatim in the rendered page. Source-only scorer.' },
+  c1: { label: 'C1 lint',        group: 'Code Quality',  desc: 'ESLint with typescript-eslint recommended rules run over the source ZIP. Score decays linearly from 0 errors/1k LOC (1.0) to 20+ errors/1k LOC (0). Source-only.' },
+  c2: { label: 'C2 types',       group: 'Code Quality',  desc: 'tsc --noEmit --strict run on the source. 0 type errors = 1.0; decays at 20 errors/1k LOC. "Cannot find module" errors are filtered out. Source-only.' },
+  c3: { label: 'C3 a11y',        group: 'Code Quality',  desc: 'axe-core WCAG 2.1/2.2 AA audit. Score = 1 − (violations / (violations + passes)); weighted by violation impact (critical > serious > moderate > minor).' },
+  c4: { label: 'C4 perf',        group: 'Code Quality',  desc: 'Lighthouse performance score (mobile throttled, median of 3 runs). Composite of FCP, LCP, TBT, CLS, Speed Index.' },
+  c5: { label: 'C5 bundle',      group: 'Code Quality',  desc: 'Uncompressed JS + CSS source size. Full marks up to 150 KB; linear penalty up to 1 MB; 0 above 1 MB. Source-only. Does not account for tree-shaking.' },
+  c6: { label: 'C6 complexity',  group: 'Code Quality',  desc: 'Cognitive complexity via eslint-plugin-sonarjs. Functions exceeding threshold 15 are flagged. Score decays from 0 violations/1k LOC (1.0) to 10+/1k (0). Source-only.' },
+  c7: { label: 'C7 audit',       group: 'Code Quality',  desc: 'npm audit CVE count from the source lockfile. Weighted: critical×10 + high×3 + moderate×1 + low×0.1. Score decays to 0 at 20 weighted penalty points. Source-only.' },
+  c8: { label: 'C8 secrets',     group: 'Code Quality',  desc: 'Regex scan for leaked credentials: OpenAI/Anthropic API keys, AWS access keys, GitHub PATs, PEM headers, hardcoded passwords. Any match = 0. Source-only.' },
   c9: { label: 'C9 SEO',         group: 'Code Quality',  desc: 'Deterministic DOM checks: title length (10–70 chars), meta description (50–300 chars), canonical URL, OG tags (title/description/type), html[lang], heading hierarchy.' },
-  v1: { label: 'V1 Visual',      group: 'Visual',        desc: 'MLLM visual judge (Gemini 2.5 Pro via OpenRouter). 8 criteria scored 1–5: visual hierarchy, typography, color harmony, whitespace, brand fit, CTA prominence, mobile layout, overall polish. Normalised to 0–1.' },
-  v2: { label: 'V2 Design',      group: 'Visual',        desc: 'Deterministic in-browser design heuristics: whitespace ratio (≥25% background), WCAG AA contrast pass rate (≥80% of text nodes), readable font sizes (≥80% ≥14px), line length (≥70% blocks ≤85ch).' },
-  v4: { label: 'V4 Responsive',  group: 'Visual',        desc: 'Playwright viewport tests at 360×800 (mobile), 768×1024 (tablet), 1440×900 (desktop). Checks: no horizontal overflow at each breakpoint + mobile touch targets ≥44px. 4 checks total.' },
+  v1: { label: 'V1 visual',      group: 'Visual',        desc: 'MLLM visual judge (Gemini 2.5 Pro via OpenRouter). 8 criteria scored 1–5: visual hierarchy, typography, color harmony, whitespace, brand fit, CTA prominence, mobile layout, overall polish. Normalised to 0–1.' },
+  v2: { label: 'V2 design',      group: 'Visual',        desc: 'Deterministic in-browser design heuristics: whitespace ratio (≥25% background), WCAG AA contrast pass rate (≥80% of text nodes), readable font sizes (≥80% ≥14px), line length (≥70% blocks ≤85ch).' },
+  v4: { label: 'V4 responsive',  group: 'Visual',        desc: 'Playwright viewport tests at 360×800 (mobile), 768×1024 (tablet), 1440×900 (desktop). Checks: no horizontal overflow at each breakpoint + mobile touch targets ≥44px. 4 checks total.' },
   cost: { label: 'Cost',         group: 'Cost',          desc: 'Informational only — not included in composite score. Self-reported by user at submission: TTFR (time to first render), TTWB (time to working build), USD estimate.' },
 };
 
@@ -151,8 +151,19 @@ function renderHtml(runs: RunSummary[]): string {
   };
 
   const dimHeaders = visibleDims.map(thWithTooltip).join('');
+  const summary = summarizeByTool(runs);
+  const rankedSummaryEntries = [...summary.entries()]
+    .sort((a, b) =>
+      (b[1].composite ?? -1) - (a[1].composite ?? -1) ||
+      a[0].localeCompare(b[0]),
+    );
+  const toolRank = new Map(rankedSummaryEntries.map(([tool], index) => [tool, index]));
 
-  const perRunRows = runs.map((r) => {
+  const perRunRows = [...runs].sort((a, b) =>
+    (toolRank.get(a.tool) ?? Number.MAX_SAFE_INTEGER) - (toolRank.get(b.tool) ?? Number.MAX_SAFE_INTEGER) ||
+    a.promptId.localeCompare(b.promptId) ||
+    a.runIdx - b.runIdx,
+  ).map((r) => {
     const c = computeComposite(r.scores);
     const pct = c ? (c.score * 100).toFixed(1) : null;
     const bar = c ? scoreBar(c.score) : '';
@@ -160,7 +171,7 @@ function renderHtml(runs: RunSummary[]): string {
     const scoreCell = pct
       ? `<td class="score-cell"><div class="score-wrap ${scoreCls}">${bar}<span class="score-num">${pct}</span></div></td>`
       : `<td class="na">—</td>`;
-    const dimCells = visibleDims.map((d) => renderScoreCell(r.scores[d])).join('');
+    const dimCells = visibleDims.map((d) => renderScoreCell(r.scores[d]?.score)).join('');
     const toolSlug = escape(r.tool);
     return `<tr>
       ${scoreCell}
@@ -172,11 +183,8 @@ function renderHtml(runs: RunSummary[]): string {
     </tr>`;
   }).join('\n');
 
-  const summary = summarizeByTool(runs);
   const rank = { i: 0 };
-  const summaryRows = [...summary.entries()]
-    .sort((a, b) => (b[1].composite ?? 0) - (a[1].composite ?? 0))
-    .map(([tool, agg]) => {
+  const summaryRows = rankedSummaryEntries.map(([tool, agg]) => {
       rank.i++;
       const medal = `<span class="rank-circle">${rank.i}</span>`;
       const pct = agg.composite !== null ? (agg.composite * 100).toFixed(1) : null;
@@ -185,11 +193,7 @@ function renderHtml(runs: RunSummary[]): string {
       const scoreCell = pct
         ? `<td class="score-cell"><div class="score-wrap ${cls}">${bar}<span class="score-num">${pct}</span></div></td>`
         : `<td class="na">—</td>`;
-      const dimCells = visibleDims.map((d) =>
-        agg.dims[d] !== null
-          ? `<td class="dim-avg">${renderMiniBar(agg.dims[d]!)}<span>${(agg.dims[d]! * 100).toFixed(0)}</span></td>`
-          : `<td class="na">—</td>`,
-      ).join('');
+      const dimCells = visibleDims.map((d) => renderScoreCell(agg.dims[d])).join('');
       return `<tr>
         <td class="rank-cell">${medal}</td>
         ${scoreCell}
@@ -208,7 +212,7 @@ function renderHtml(runs: RunSummary[]): string {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>AI Sitebuilder Benchmark</title>
+<title>AI sitebuilder benchmark</title>
 <script src="https://unpkg.com/lucide@latest"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -315,7 +319,7 @@ function renderHtml(runs: RunSummary[]): string {
   .main { max-width: 1600px; margin: 0 auto; padding: 2rem; }
   section { margin-bottom: 3rem; }
   .section-title {
-    font-size: 1rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+    font-size: 1rem; font-weight: 700; letter-spacing: 0;
     color: var(--text-dim); margin-bottom: 1rem; display: flex; align-items: center; gap: .5rem;
   }
   .section-title::after { content: ''; flex: 1; height: 1px; background: var(--border); }
@@ -326,7 +330,7 @@ function renderHtml(runs: RunSummary[]): string {
   thead { position: sticky; top: 0; z-index: 10; }
   th {
     background: var(--surface2); color: var(--text-dim);
-    font-size: .72rem; font-weight: 600; text-transform: uppercase; letter-spacing: .06em;
+    font-size: .72rem; font-weight: 600; text-transform: none; letter-spacing: 0;
     padding: .6rem .75rem; border-bottom: 1px solid var(--border);
     white-space: nowrap; user-select: none;
   }
@@ -374,14 +378,12 @@ function renderHtml(runs: RunSummary[]): string {
   .mid .score-num { color: var(--yellow); }
   .lo .score-num { color: var(--red); }
 
-  /* ── Mini bar (leaderboard dim cells) ── */
+  /* ── Mini bar metric cells ── */
   .dim-avg { font-size: .8rem; color: var(--text-dim); }
   .dim-avg span { display: inline-block; min-width: 22px; }
   .mini-bar { display: inline-block; width: 28px; height: 3px; border-radius: 99px; margin-right: 4px; vertical-align: middle; }
 
   /* ── Per-run cells ── */
-  td.pass { background: rgba(34,197,94,.07) !important; color: var(--green); }
-  td.fail { background: rgba(239,68,68,.07) !important; color: #fca5a5; }
   td.na { color: var(--text-muted) !important; background: var(--surface) !important; }
   .rank-cell { text-align: center; width: 48px; }
   .rank-circle {
@@ -419,7 +421,7 @@ function renderHtml(runs: RunSummary[]): string {
   .glossary-id { font-size: .7rem; font-weight: 700; font-family: monospace; color: var(--text-muted); }
   .glossary-label { font-size: .85rem; font-weight: 700; color: var(--text); }
   .glossary-group {
-    font-size: .65rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+    font-size: .65rem; font-weight: 700; text-transform: none; letter-spacing: 0;
     padding: .1rem .4rem; border-radius: 99px; margin-left: auto;
   }
   .glossary-desc { font-size: .8rem; color: var(--text-muted); line-height: 1.5; }
@@ -440,7 +442,7 @@ function renderHtml(runs: RunSummary[]): string {
 <header class="site-header">
   <div class="header-inner">
     <div class="header-text">
-      <div class="header-title">AI Sitebuilder Benchmark</div>
+      <div class="header-title">AI sitebuilder benchmark</div>
       <div style="color:var(--text-dim);font-size:.88rem;margin-top:.25rem">
         Reproducible, open-source scoring for AI-generated websites
       </div>
@@ -547,10 +549,9 @@ function renderMiniBar(score: number): string {
   return `<div class="mini-bar" style="background:${color};width:${Math.round(pct * 0.28)}px"></div>`;
 }
 
-function renderScoreCell(score: ScorerResult | undefined): string {
-  if (!score || score.score === null) return `<td class="na">—</td>`;
-  const cls = score.passed === true ? 'pass' : score.passed === false ? 'fail' : 'na';
-  return `<td class="${cls}">${(score.score * 100).toFixed(0)}</td>`;
+function renderScoreCell(score: number | null | undefined): string {
+  if (score == null) return `<td class="na">—</td>`;
+  return `<td class="dim-avg">${renderMiniBar(score)}<span>${(score * 100).toFixed(0)}</span></td>`;
 }
 
 function escape(s: string): string {
