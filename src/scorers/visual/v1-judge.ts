@@ -105,7 +105,7 @@ Respond with JSON only.`;
 
     const response = await client.chat.completions.create({
       model,
-      max_tokens: 2048,
+      max_tokens: 4096,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         {
@@ -116,11 +116,23 @@ Respond with JSON only.`;
     });
 
     const raw = response.choices[0]?.message?.content ?? '';
-    const judgeOutput = parseJudgeOutput(raw);
+    let judgeOutput: JudgeOutput;
+    try {
+      judgeOutput = parseJudgeOutput(raw);
+    } catch (err) {
+      await writeJson(join(ctx.paths.root, 'v1-judge.json'), {
+        model,
+        raw,
+        parseError: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
 
     await writeJson(join(ctx.paths.root, 'v1-judge.json'), { model, raw, parsed: judgeOutput });
 
-    const scored = judgeOutput.criteria.filter((c) => c.score >= 1 && c.score <= 5);
+    const scored = judgeOutput.criteria
+      .map((c) => ({ ...c, score: Number(c.score) }))
+      .filter((c) => c.score >= 1 && c.score <= 5);
     const meanScore = scored.length > 0
       ? scored.reduce((s, c) => s + c.score, 0) / scored.length
       : null;

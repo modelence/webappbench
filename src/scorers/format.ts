@@ -41,10 +41,12 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
       }
 
       case 'v1': {
-        const mean = d['meanRaw'] as number | null;
-        const notes = d['overall_notes'] as string | null;
+        const mean = typeof d['meanRaw'] === 'number' ? d['meanRaw'] : null;
+        const notes = (d['overallNotes'] ?? d['overall_notes']) as string | null;
         const note = d['note'] as string | null;
-        if (note) return note.slice(0, 60);
+        const error = d['error'] as string | null;
+        if (note) return note.slice(0, 80);
+        if (error) return `error: ${error.slice(0, 80)}`;
         if (mean === null) return 'N/A';
         const pct = ((mean - 1) / 4 * 100).toFixed(0);
         const model = String(d['model'] ?? '?').split('/').pop() ?? '';
