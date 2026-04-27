@@ -80,6 +80,7 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
       }
 
       case 'c6': {
+        if (d['note']) return String(d['note']).slice(0, 60);
         const v = Number(d['totalViolations'] ?? 0);
         const per1k = (d['violationsPer1kLoc'] as number | undefined) ?? 0;
         if (v === 0) return 'no complex functions';
@@ -90,6 +91,7 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
       }
 
       case 'c7': {
+        if (d['note']) return String(d['note']).slice(0, 60);
         const critical = Number(d['critical'] ?? 0);
         const high = Number(d['high'] ?? 0);
         const moderate = Number(d['moderate'] ?? 0);

@@ -7,7 +7,7 @@ import { ALL_TOOLS } from './core/types.ts';
 import type { ToolName, UserReportedCost, UserReportedTiming } from './core/types.ts';
 import { loadCorpus } from './prompts/schema.ts';
 import { computeComposite, formatComposite } from './scorers/composite.ts';
-import { formatScorerDetail } from './scorers/format.ts';
+import { makeProgressHandler } from './scorers/progress.ts';
 import { scoreSubmission } from './scorers/orchestrate.ts';
 import { scoreAll } from './scorers/score-all.ts';
 import { generateReport } from './report/generate.ts';
@@ -128,28 +128,12 @@ program
   .argument('<dir>', 'Submission directory (contains submission.json + prompt.json)')
   .action(async (dir: string) => {
     console.log(`Scoring ${dir}`);
-    const { results } = await scoreSubmission(dir, {
-      onProgress: (e) => {
-        if (e.kind === 'scorer_start') {
-          process.stdout.write(`  ${e.name.padEnd(5)} running…`);
-        } else {
-          const pass = e.result.passed === null ? 'N/A' : e.result.passed ? 'yes' : 'NO ';
-          const score = e.result.score === null ? '  N/A' : e.result.score.toFixed(3);
-          const elapsed = formatElapsedForCli(e.elapsedMs);
-          const detail = formatScorerDetail(e.name, e.result);
-          const suffix = detail ? `   ${detail}` : '';
-          process.stdout.write(`\r  ${e.name.padEnd(5)} ${pass}   ${score}   ${elapsed.padEnd(6)}${suffix}\n`);
-        }
-      },
-    });
+    const { onProgress, flush } = makeProgressHandler();
+    const { results } = await scoreSubmission(dir, { onProgress });
+    flush();
     console.log(`  ${formatComposite(computeComposite(results))}`);
   });
 
-function formatElapsedForCli(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const s = ms / 1000;
-  return s < 60 ? `${s.toFixed(1)}s` : `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
-}
 
 interface ScoreAllOptions {
   config: string;

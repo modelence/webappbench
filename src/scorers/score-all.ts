@@ -2,8 +2,8 @@ import { loadConfig, type SubmissionConfigEntry } from '../core/config.ts';
 import { createSubmissionArtifact } from '../core/submission.ts';
 import type { UserReportedCost, UserReportedTiming } from '../core/types.ts';
 import { computeComposite, formatComposite } from './composite.ts';
-import { formatScorerDetail } from './format.ts';
 import { scoreSubmission } from './orchestrate.ts';
+import { makeProgressHandler } from './progress.ts';
 import type { ScorerResult } from './types.ts';
 
 export interface BatchOutcome {
@@ -57,20 +57,9 @@ async function runOne(
       corpusDir: opts.corpusDir,
       artifactsRoot: opts.artifactsRoot,
     });
-    const { results } = await scoreSubmission(paths.root, {
-      onProgress: (e) => {
-        if (e.kind === 'scorer_start') {
-          process.stdout.write(`  ${e.name.padEnd(5)} running…`);
-        } else {
-          const pass = e.result.passed === null ? 'N/A' : e.result.passed ? 'yes' : 'NO ';
-          const score = e.result.score === null ? '  N/A' : e.result.score.toFixed(3);
-          const elapsed = formatElapsed(e.elapsedMs);
-          const detail = formatScorerDetail(e.name, e.result);
-          const suffix = detail ? `   ${detail}` : '';
-          process.stdout.write(`\r  ${e.name.padEnd(5)} ${pass}   ${score}   ${elapsed.padEnd(6)}${suffix}\n`);
-        }
-      },
-    });
+    const { onProgress, flush } = makeProgressHandler();
+    const { results } = await scoreSubmission(paths.root, { onProgress });
+    flush();
     console.log(`  ${formatComposite(computeComposite(results))}`);
     return {
       tool: entry.tool,
@@ -109,8 +98,3 @@ function costFromEntry(e: SubmissionConfigEntry): UserReportedCost | undefined {
   return Object.keys(c).length > 0 ? c : undefined;
 }
 
-function formatElapsed(ms: number): string {
-  if (ms < 1000) return `${ms}ms`;
-  const s = ms / 1000;
-  return s < 60 ? `${s.toFixed(1)}s` : `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
-}
