@@ -1,7 +1,7 @@
 import type { ScorerResult } from './types.ts';
 
 // Scorers that contribute to the composite (cost is self-reported, excluded)
-const QUALITY_SCORERS = ['f1', 'f2', 'f5', 'f6', 'c1', 'c3', 'c4', 'c5', 'c9'];
+const QUALITY_SCORERS = ['f1', 'f2', 'f5', 'f6', 'c1', 'c3', 'v4', 'c4', 'c5', 'c9'];
 
 export interface CompositeScore {
   score: number;   // 0..1

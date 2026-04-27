@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import type { Browser, Page } from '@playwright/test';
 import type { ArtifactPaths } from '../core/artifact.ts';
 import type { Submission } from '../core/submission.ts';
 import type { Prompt } from '../core/types.ts';
@@ -8,6 +8,7 @@ export interface ScorerContext {
   prompt: Prompt;
   paths: ArtifactPaths;
   page: Page;
+  browser: Browser;
   sourceDir?: string;  // extracted source directory — present only when user supplied a ZIP
 }
 

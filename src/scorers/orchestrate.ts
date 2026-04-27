@@ -14,6 +14,7 @@ import { runC3, C3_VERSION } from './code-quality/c3-axe.ts';
 import { runC4, C4_VERSION } from './code-quality/c4-lighthouse.ts';
 import { runC5, C5_VERSION } from './code-quality/c5-bundle-size.ts';
 import { runC9, C9_VERSION } from './code-quality/c9-seo.ts';
+import { runV4, V4_VERSION } from './visual/v4-responsive.ts';
 import { runCost, COST_VERSION } from './cost.ts';
 import type { ScorerContext, ScorerResult } from './types.ts';
 
@@ -54,7 +55,7 @@ export async function scoreSubmission(
 
   const sourceDir = join(artifactDir, 'source');
   const hasSource = await access(sourceDir).then(() => true).catch(() => false);
-  const ctx: ScorerContext = { submission, prompt, paths, page, sourceDir: hasSource ? sourceDir : undefined };
+  const ctx: ScorerContext = { submission, prompt, paths, page, browser, sourceDir: hasSource ? sourceDir : undefined };
   const results: Record<string, ScorerResult> = {};
 
   const runScorer = async (
@@ -87,6 +88,7 @@ export async function scoreSubmission(
       await page.screenshot({ path: join(paths.screenshots, 'mid-scroll.png'), fullPage: false }).catch(() => undefined);
       results['c3'] = await runScorer('c3', () => runC3(ctx));
       results['c9'] = await runScorer('c9', () => runC9(ctx));
+      results['v4'] = await runScorer('v4', () => runV4(ctx));
       results['c4'] = await runScorer('c4', () => runC4(ctx));
     } else {
       errorCollector.stop();
@@ -100,6 +102,7 @@ export async function scoreSubmission(
       results['f2'] = { ...skip, scorer: 'f2', version: F2_VERSION };
       results['f5'] = { ...skip, scorer: 'f5', version: F5_VERSION };
       results['c3'] = { ...skip, scorer: 'c3', version: C3_VERSION };
+      results['v4'] = { ...skip, scorer: 'v4', version: V4_VERSION };
       results['c4'] = { ...skip, scorer: 'c4', version: C4_VERSION };
       results['c9'] = { ...skip, scorer: 'c9', version: C9_VERSION };
     }
@@ -128,6 +131,7 @@ export async function scoreSubmission(
       ...(hasSource && { f6: F6_VERSION }),
       ...(hasSource && { c1: C1_VERSION }),
       c3: C3_VERSION,
+      v4: V4_VERSION,
       c4: C4_VERSION,
       ...(hasSource && { c5: C5_VERSION }),
       c9: C9_VERSION,

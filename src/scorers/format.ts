@@ -40,6 +40,15 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
         return `${passed}/${total} verbatim${suffix}`;
       }
 
+      case 'v4': {
+        const passing = Number(d['passingChecks'] ?? 0);
+        const total = Number(d['totalChecks'] ?? 0);
+        const checks = (d['checks'] as Array<Record<string, unknown>>) ?? [];
+        const failures = checks.filter((c) => c['pass'] === false).map((c) => String(c['name']));
+        const suffix = failures.length ? ` — failed: ${failures.join(', ')}` : '';
+        return `${passing}/${total} checks${suffix}`;
+      }
+
       case 'c1': {
         const errors = Number(d['totalErrors'] ?? 0);
         const warns = Number(d['totalWarnings'] ?? 0);
