@@ -72,8 +72,8 @@ async function loadRun(runDir: string): Promise<RunSummary | null> {
   }
 }
 
-const BASE_DIMS = ['f1', 'f2', 'f5', 'c3', 'v4', 'c4', 'c9'] as const;
-const SOURCE_DIMS = ['f6', 'c1', 'c5'] as const;
+const BASE_DIMS = ['f1', 'f2', 'f5', 'c3', 'v1', 'v4', 'c4', 'c9'] as const;
+const SOURCE_DIMS = ['f6', 'c1', 'c2', 'c5', 'c8'] as const;
 const ALL_DIMS = [...BASE_DIMS, ...SOURCE_DIMS, 'cost'] as const;
 type Dim = (typeof ALL_DIMS)[number];
 
@@ -126,8 +126,8 @@ function summarizeByTool(runs: RunSummary[]): Map<string, ToolAgg> {
 function renderHtml(runs: RunSummary[]): string {
   const anySource = runs.some((r) => r.hasSource);
   const dimHeaders = [
-    '<th>F1 render</th>', '<th>F2 accept</th>', '<th>F5 errors</th>', '<th>C3 a11y</th>', '<th>V4 responsive</th>', '<th>C4 perf</th>', '<th>C9 SEO</th>',
-    ...(anySource ? ['<th>F6 verbatim</th>', '<th>C1 lint</th>', '<th>C5 bundle</th>'] : []),
+    '<th>F1 render</th>', '<th>F2 accept</th>', '<th>F5 errors</th>', '<th>C3 a11y</th>', '<th>V1 visual</th>', '<th>V4 responsive</th>', '<th>C4 perf</th>', '<th>C9 SEO</th>',
+    ...(anySource ? ['<th>F6 verbatim</th>', '<th>C1 lint</th>', '<th>C2 types</th>', '<th>C5 bundle</th>', '<th>C8 secrets</th>'] : []),
     '<th>Cost</th>',
   ];
 

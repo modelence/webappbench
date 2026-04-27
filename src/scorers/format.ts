@@ -40,6 +40,18 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
         return `${passed}/${total} verbatim${suffix}`;
       }
 
+      case 'v1': {
+        const mean = d['meanRaw'] as number | null;
+        const notes = d['overall_notes'] as string | null;
+        const note = d['note'] as string | null;
+        if (note) return note.slice(0, 60);
+        if (mean === null) return 'N/A';
+        const pct = ((mean - 1) / 4 * 100).toFixed(0);
+        const model = String(d['model'] ?? '?').split('/').pop() ?? '';
+        const suffix = notes ? ` — ${notes.slice(0, 50)}` : '';
+        return `${mean.toFixed(1)}/5 (${pct}%) via ${model}${suffix}`;
+      }
+
       case 'v4': {
         const passing = Number(d['passingChecks'] ?? 0);
         const total = Number(d['totalChecks'] ?? 0);
@@ -47,6 +59,21 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
         const failures = checks.filter((c) => c['pass'] === false).map((c) => String(c['name']));
         const suffix = failures.length ? ` — failed: ${failures.join(', ')}` : '';
         return `${passing}/${total} checks${suffix}`;
+      }
+
+      case 'c2': {
+        const errors = Number(d['totalErrors'] ?? 0);
+        const loc = Number(d['totalLoc'] ?? 0);
+        const per1k = (d['errorsPer1kLoc'] as number | undefined) ?? 0;
+        if (errors === 0) return `no type errors (${loc} LOC)`;
+        return `${errors} type error${errors === 1 ? '' : 's'} / ${loc} LOC (${per1k.toFixed(1)}/1k)`;
+      }
+
+      case 'c8': {
+        const count = Number(d['findingsCount'] ?? 0);
+        if (count === 0) return 'no secrets found';
+        const patterns = (d['patternsSeen'] as string[] | undefined) ?? [];
+        return `${count} secret${count === 1 ? '' : 's'} found: ${patterns.join(', ')}`;
       }
 
       case 'c1': {

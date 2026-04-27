@@ -1,4 +1,7 @@
 import { Command, InvalidArgumentError } from 'commander';
+import { loadDotenv } from './core/env.ts';
+
+await loadDotenv();
 import { createSubmissionArtifact } from './core/submission.ts';
 import { ALL_TOOLS } from './core/types.ts';
 import type { ToolName, UserReportedCost, UserReportedTiming } from './core/types.ts';
