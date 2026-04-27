@@ -4,7 +4,8 @@ export type ToolName =
   | 'same-new'
   | 'v0'
   | 'bolt'
-  | 'claude-artifacts';
+  | 'claude-artifacts'
+  | 'modelence';
 
 export const ALL_TOOLS: readonly ToolName[] = [
   'lovable',
@@ -13,6 +14,7 @@ export const ALL_TOOLS: readonly ToolName[] = [
   'v0',
   'bolt',
   'claude-artifacts',
+  'modelence',
 ];
 
 export interface Prompt {
