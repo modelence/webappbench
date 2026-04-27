@@ -18,6 +18,17 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
         return `${must} · ${should}${suffix}`;
       }
 
+      case 'f5': {
+        const total = Number(d['totalErrors'] ?? 0);
+        if (total === 0) return 'no errors';
+        const ce = Number(d['consoleErrorCount'] ?? 0);
+        const ne = Number(d['networkErrorCount'] ?? 0);
+        const parts: string[] = [];
+        if (ce > 0) parts.push(`${ce} console error${ce === 1 ? '' : 's'}`);
+        if (ne > 0) parts.push(`${ne} network error${ne === 1 ? '' : 's'}`);
+        return parts.join(' · ');
+      }
+
       case 'f6': {
         const passed = Number(d['passed'] ?? 0);
         const total = Number(d['total'] ?? 0);

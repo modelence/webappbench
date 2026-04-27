@@ -1,0 +1,51 @@
+id: startup-landing
+tier: 2
+prompt: |
+  Build a marketing landing page for "Helix", a developer tool that auto-generates
+  API documentation from code. Target audience: backend engineers and tech leads.
+  Include: a hero with headline "Your API docs, always up to date", a sub-headline,
+  and two CTA buttons — "Start for free" (primary) and "See the demo" (secondary);
+  a social proof bar with 3–4 company logos ("Trusted by teams at..."); a
+  three-feature section with icons; a single testimonial from a CTO; a pricing
+  teaser mentioning "Free for open source"; and a final CTA section.
+  Design should feel like a modern developer tool (dark or clean tech aesthetic).
+
+must_have:
+  - id: hero_heading
+    locator: "getByRole('heading', { level: 1 })"
+    assert: "toBeVisible"
+  - id: primary_cta
+    locator: "getByRole('button', { name: /start for free/i }).or(getByRole('link', { name: /start for free/i }))"
+    assert: "toBeVisible"
+  - id: secondary_cta
+    locator: "getByRole('button', { name: /see the demo/i }).or(getByRole('link', { name: /see the demo/i }))"
+    assert: "toBeVisible"
+
+should_have:
+  - id: testimonial
+    locator: "locator('blockquote')"
+    assert: "toBeVisible"
+  - id: feature_sections
+    locator: "locator('h2, h3')"
+    assert: "toHaveCountAtLeast(4)"
+
+verbatim_constraints:
+  - type: exact_copy
+    value: "Your API docs, always up to date"
+    where: "hero headline"
+  - type: exact_copy
+    value: "Helix"
+    where: "product name in nav or hero"
+  - type: exact_copy
+    value: "Start for free"
+    where: "primary CTA button"
+  - type: exact_copy
+    value: "Free for open source"
+    where: "pricing teaser text"
+
+seo_applicable:
+  - title
+  - meta_description
+  - og_tags
+  - lang
+  - heading_hierarchy

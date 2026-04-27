@@ -1,0 +1,45 @@
+id: portfolio-landing
+tier: 1
+prompt: |
+  Build a one-page portfolio site for Alex Rivera, a freelance UI/UX designer.
+  Include: a hero with name, tagline "Designing experiences people love", and a
+  "View my work" CTA; a three-project showcase grid (placeholder images, project
+  title, short description); an "About" section with a short bio; a contact
+  section with an email link. Keep it clean and minimal. No frameworks required —
+  plain HTML/CSS is fine.
+
+must_have:
+  - id: hero_heading
+    locator: "getByRole('heading', { level: 1 })"
+    assert: "toBeVisible"
+  - id: cta_view_work
+    locator: "getByRole('link', { name: /view my work/i })"
+    assert: "toBeVisible"
+  - id: contact_section
+    locator: "locator('a[href^=\"mailto:\"]')"
+    assert: "toBeVisible"
+
+should_have:
+  - id: project_cards
+    locator: "locator('h2, h3')"
+    assert: "toHaveCountAtLeast(3)"
+  - id: about_section
+    locator: "locator('section, article')"
+    assert: "toHaveCountAtLeast(2)"
+
+verbatim_constraints:
+  - type: exact_copy
+    value: "Designing experiences people love"
+    where: "hero tagline"
+  - type: exact_copy
+    value: "Alex Rivera"
+    where: "hero heading or site title"
+  - type: exact_copy
+    value: "View my work"
+    where: "primary CTA link"
+
+seo_applicable:
+  - title
+  - meta_description
+  - lang
+  - heading_hierarchy

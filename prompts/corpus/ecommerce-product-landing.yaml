@@ -1,0 +1,47 @@
+id: ecommerce-product-landing
+tier: 2
+prompt: |
+  Build a product landing page for "ArcLight Pro", a portable LED desk lamp.
+  Include: a hero with product name, tagline "Light that works as hard as you do",
+  product image placeholder, price "$89", and a prominent "Add to cart" button;
+  a three-feature section (adjustable brightness, USB-C charging, 12-hour battery);
+  customer reviews (at least 3 star ratings with text); a sticky "Add to cart"
+  button that remains visible on scroll. Use a clean, e-commerce aesthetic with
+  good product photography framing.
+
+must_have:
+  - id: product_heading
+    locator: "getByRole('heading', { level: 1 })"
+    assert: "toBeVisible"
+  - id: add_to_cart
+    locator: "getByRole('button', { name: /add to cart/i })"
+    assert: "toBeVisible"
+  - id: price_visible
+    locator: "getByText(/\\$89/)"
+    assert: "toBeVisible"
+
+should_have:
+  - id: feature_list
+    locator: "locator('h2, h3')"
+    assert: "toHaveCountAtLeast(3)"
+  - id: reviews
+    locator: "locator('blockquote, [role=\"blockquote\"], .review, .testimonial')"
+    assert: "toHaveCountAtLeast(2)"
+
+verbatim_constraints:
+  - type: exact_copy
+    value: "ArcLight Pro"
+    where: "product name heading"
+  - type: exact_copy
+    value: "Light that works as hard as you do"
+    where: "hero tagline"
+  - type: exact_copy
+    value: "Add to cart"
+    where: "primary CTA button"
+
+seo_applicable:
+  - title
+  - meta_description
+  - og_tags
+  - lang
+  - heading_hierarchy

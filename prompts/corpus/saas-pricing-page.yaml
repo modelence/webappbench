@@ -1,0 +1,47 @@
+id: saas-pricing-page
+tier: 2
+prompt: |
+  Build a SaaS pricing page for "Pulseflow", a workflow automation tool.
+  Include: a heading "Simple, transparent pricing"; three pricing tiers —
+  Starter (Free), Pro ($29/mo), and Business ($99/mo); each tier must show
+  its name, price, a short description, a feature list (at least 3 bullet
+  points), and a CTA button. The Pro tier should be visually highlighted as
+  "Most popular". Add a FAQ section with at least 3 questions. Use a clean,
+  modern design with good contrast.
+
+must_have:
+  - id: pricing_heading
+    locator: "getByRole('heading', { level: 1 })"
+    assert: "toBeVisible"
+  - id: three_tier_cards
+    locator: "locator('h2, h3').filter({ hasText: /starter|pro|business|free/i })"
+    assert: "toHaveCountAtLeast(3)"
+  - id: cta_buttons
+    locator: "getByRole('button').or(getByRole('link')).filter({ hasText: /get started|sign up|try/i })"
+    assert: "toHaveCountAtLeast(3)"
+
+should_have:
+  - id: faq_section
+    locator: "locator('h2, h3').filter({ hasText: /faq|frequently|question/i })"
+    assert: "toBeVisible"
+  - id: most_popular_badge
+    locator: "getByText(/most popular/i)"
+    assert: "toBeVisible"
+
+verbatim_constraints:
+  - type: exact_copy
+    value: "Simple, transparent pricing"
+    where: "page heading"
+  - type: exact_copy
+    value: "Pulseflow"
+    where: "page title or logo"
+  - type: exact_copy
+    value: "Most popular"
+    where: "Pro tier badge"
+
+seo_applicable:
+  - title
+  - meta_description
+  - og_tags
+  - lang
+  - heading_hierarchy

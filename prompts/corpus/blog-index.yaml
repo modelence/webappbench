@@ -1,0 +1,45 @@
+id: blog-index
+tier: 1
+prompt: |
+  Build a blog index page for "The Gradient", a newsletter and blog about AI
+  and technology. Include: a sticky header with the blog name and a "Subscribe"
+  button; a hero section with the tagline "Thoughts on AI, startups, and the
+  future"; a grid of at least 4 article cards — each card showing a title,
+  date, 1-sentence excerpt, and a "Read more" link; a footer with copyright.
+
+must_have:
+  - id: site_heading
+    locator: "getByRole('heading', { level: 1 })"
+    assert: "toBeVisible"
+  - id: subscribe_button
+    locator: "getByRole('button', { name: /subscribe/i }).or(getByRole('link', { name: /subscribe/i }))"
+    assert: "toBeVisible"
+  - id: article_cards
+    locator: "locator('article, [role=\"article\"]').or(locator('a').filter({ hasText: /read more/i }))"
+    assert: "toHaveCountAtLeast(4)"
+
+should_have:
+  - id: footer_present
+    locator: "getByRole('contentinfo')"
+    assert: "toBeVisible"
+  - id: dates_visible
+    locator: "locator('time')"
+    assert: "toHaveCountAtLeast(3)"
+
+verbatim_constraints:
+  - type: exact_copy
+    value: "The Gradient"
+    where: "site header logo or h1"
+  - type: exact_copy
+    value: "Subscribe"
+    where: "header button or link"
+  - type: exact_copy
+    value: "Thoughts on AI, startups, and the future"
+    where: "hero tagline"
+
+seo_applicable:
+  - title
+  - meta_description
+  - og_tags
+  - lang
+  - heading_hierarchy

@@ -7,6 +7,7 @@ import { readSubmission } from '../core/submission.ts';
 import type { Prompt } from '../core/types.ts';
 import { runF1, F1_VERSION } from './functional/f1-render.ts';
 import { runF2, F2_VERSION } from './functional/f2-acceptance.ts';
+import { attachErrorCollector, scoreF5, F5_VERSION } from './functional/f5-errors.ts';
 import { runF6, F6_VERSION } from './functional/f6-verbatim.ts';
 import { runC1, C1_VERSION } from './code-quality/c1-eslint.ts';
 import { runC3, C3_VERSION } from './code-quality/c3-axe.ts';
@@ -68,10 +69,18 @@ export async function scoreSubmission(
     return result;
   };
 
+  // Attach error collector before any navigation so we capture everything.
+  const errorCollector = attachErrorCollector(page);
+
   try {
     results['f1'] = await runScorer('f1', () => runF1(ctx));
     if (results['f1']?.passed) {
       results['f2'] = await runScorer('f2', () => runF2(ctx));
+      // Score F5 here — all page events during F1+F2 have been collected.
+      results['f5'] = await runScorer('f5', async () => {
+        errorCollector.stop();
+        return scoreF5(errorCollector);
+      });
       await page.screenshot({ path: join(paths.screenshots, 'post-interaction.png'), fullPage: true }).catch(() => undefined);
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2)).catch(() => undefined);
       await page.waitForTimeout(500);
@@ -80,6 +89,7 @@ export async function scoreSubmission(
       results['c9'] = await runScorer('c9', () => runC9(ctx));
       results['c4'] = await runScorer('c4', () => runC4(ctx));
     } else {
+      errorCollector.stop();
       const skip: ScorerResult = {
         scorer: 'skipped',
         version: 'n/a',
@@ -88,6 +98,7 @@ export async function scoreSubmission(
         details: { reason: 'F1 render failed — downstream scorers skipped' },
       };
       results['f2'] = { ...skip, scorer: 'f2', version: F2_VERSION };
+      results['f5'] = { ...skip, scorer: 'f5', version: F5_VERSION };
       results['c3'] = { ...skip, scorer: 'c3', version: C3_VERSION };
       results['c4'] = { ...skip, scorer: 'c4', version: C4_VERSION };
       results['c9'] = { ...skip, scorer: 'c9', version: C9_VERSION };
@@ -113,6 +124,7 @@ export async function scoreSubmission(
     scorerVersions: {
       f1: F1_VERSION,
       f2: F2_VERSION,
+      f5: F5_VERSION,
       ...(hasSource && { f6: F6_VERSION }),
       ...(hasSource && { c1: C1_VERSION }),
       c3: C3_VERSION,
