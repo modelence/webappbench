@@ -12,11 +12,14 @@ import { runF6, F6_VERSION } from './functional/f6-verbatim.ts';
 import { runC1, C1_VERSION } from './code-quality/c1-eslint.ts';
 import { runC2, C2_VERSION } from './code-quality/c2-types.ts';
 import { runC3, C3_VERSION } from './code-quality/c3-axe.ts';
-import { runC8, C8_VERSION } from './code-quality/c8-secrets.ts';
 import { runC4, C4_VERSION } from './code-quality/c4-lighthouse.ts';
 import { runC5, C5_VERSION } from './code-quality/c5-bundle-size.ts';
+import { runC6, C6_VERSION } from './code-quality/c6-complexity.ts';
+import { runC7, C7_VERSION } from './code-quality/c7-audit.ts';
+import { runC8, C8_VERSION } from './code-quality/c8-secrets.ts';
 import { runC9, C9_VERSION } from './code-quality/c9-seo.ts';
 import { runV1, V1_VERSION } from './visual/v1-judge.ts';
+import { runV2, V2_VERSION } from './visual/v2-design.ts';
 import { runV4, V4_VERSION } from './visual/v4-responsive.ts';
 import { runCost, COST_VERSION } from './cost.ts';
 import type { ScorerContext, ScorerResult } from './types.ts';
@@ -92,6 +95,7 @@ export async function scoreSubmission(
       results['c3'] = await runScorer('c3', () => runC3(ctx));
       results['c9'] = await runScorer('c9', () => runC9(ctx));
       results['v1'] = await runScorer('v1', () => runV1(ctx));
+      results['v2'] = await runScorer('v2', () => runV2(ctx));
       results['v4'] = await runScorer('v4', () => runV4(ctx));
       results['c4'] = await runScorer('c4', () => runC4(ctx));
     } else {
@@ -107,6 +111,7 @@ export async function scoreSubmission(
       results['f5'] = { ...skip, scorer: 'f5', version: F5_VERSION };
       results['c3'] = { ...skip, scorer: 'c3', version: C3_VERSION };
       results['v1'] = { ...skip, scorer: 'v1', version: V1_VERSION };
+      results['v2'] = { ...skip, scorer: 'v2', version: V2_VERSION };
       results['v4'] = { ...skip, scorer: 'v4', version: V4_VERSION };
       results['c4'] = { ...skip, scorer: 'c4', version: C4_VERSION };
       results['c9'] = { ...skip, scorer: 'c9', version: C9_VERSION };
@@ -118,6 +123,8 @@ export async function scoreSubmission(
       results['c1'] = await runScorer('c1', () => runC1(sourceDir));
       results['c2'] = await runScorer('c2', () => runC2(sourceDir));
       results['c5'] = await runScorer('c5', () => runC5(sourceDir));
+      results['c6'] = await runScorer('c6', () => runC6(sourceDir));
+      results['c7'] = await runScorer('c7', () => runC7(sourceDir));
       results['c8'] = await runScorer('c8', () => runC8(sourceDir));
     }
   } finally {
@@ -140,9 +147,12 @@ export async function scoreSubmission(
       ...(hasSource && { c2: C2_VERSION }),
       c3: C3_VERSION,
       v1: V1_VERSION,
+      v2: V2_VERSION,
       v4: V4_VERSION,
       c4: C4_VERSION,
       ...(hasSource && { c5: C5_VERSION }),
+      ...(hasSource && { c6: C6_VERSION }),
+      ...(hasSource && { c7: C7_VERSION }),
       ...(hasSource && { c8: C8_VERSION }),
       c9: C9_VERSION,
       cost: COST_VERSION,

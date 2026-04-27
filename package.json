@@ -19,6 +19,7 @@
     "chrome-launcher": "^1.2.1",
     "commander": "^12.1.0",
     "eslint": "^9.39.4",
+    "eslint-plugin-sonarjs": "^4.0.3",
     "lighthouse": "^13.1.0",
     "openai": "^4.104.0",
     "typescript-eslint": "^8.59.0",

@@ -40,6 +40,14 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
         return `${passed}/${total} verbatim${suffix}`;
       }
 
+      case 'v2': {
+        const checks = (d['checks'] as Array<Record<string, unknown>>) ?? [];
+        const passed = checks.filter((c) => c['passed'] === true).length;
+        const failures = checks.filter((c) => c['passed'] === false).map((c) => String(c['name']));
+        const suffix = failures.length ? ` — failed: ${failures.join(', ')}` : '';
+        return `${passed}/${checks.length} checks${suffix}`;
+      }
+
       case 'v1': {
         const mean = typeof d['meanRaw'] === 'number' ? d['meanRaw'] : null;
         const notes = (d['overallNotes'] ?? d['overall_notes']) as string | null;
@@ -69,6 +77,31 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
         const per1k = (d['errorsPer1kLoc'] as number | undefined) ?? 0;
         if (errors === 0) return `no type errors (${loc} LOC)`;
         return `${errors} type error${errors === 1 ? '' : 's'} / ${loc} LOC (${per1k.toFixed(1)}/1k)`;
+      }
+
+      case 'c6': {
+        const v = Number(d['totalViolations'] ?? 0);
+        const per1k = (d['violationsPer1kLoc'] as number | undefined) ?? 0;
+        if (v === 0) return 'no complex functions';
+        const hotspots = (d['hotspots'] as Array<Record<string, unknown>>) ?? [];
+        const top = hotspots[0];
+        const suffix = top ? ` — worst: ${String(top['file']).split('/').pop()}:${top['line']} (${top['complexity']})` : '';
+        return `${v} violation${v === 1 ? '' : 's'} (${per1k.toFixed(1)}/1k)${suffix}`;
+      }
+
+      case 'c7': {
+        const critical = Number(d['critical'] ?? 0);
+        const high = Number(d['high'] ?? 0);
+        const moderate = Number(d['moderate'] ?? 0);
+        const low = Number(d['low'] ?? 0);
+        const total = critical + high + moderate + low;
+        if (total === 0) return 'no vulnerabilities';
+        const parts: string[] = [];
+        if (critical > 0) parts.push(`${critical} critical`);
+        if (high > 0) parts.push(`${high} high`);
+        if (moderate > 0) parts.push(`${moderate} moderate`);
+        if (low > 0) parts.push(`${low} low`);
+        return parts.join(', ');
       }
 
       case 'c8': {
