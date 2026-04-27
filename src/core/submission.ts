@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -8,6 +9,7 @@ import {
   writePromptJson,
   type ArtifactPaths,
 } from './artifact.ts';
+import { extractZip } from './extract.ts';
 import { loadPrompt } from '../prompts/schema.ts';
 import { ALL_TOOLS } from './types.ts';
 import { isoWeek } from './version.ts';
@@ -71,6 +73,7 @@ export interface CreateSubmissionOptions {
   promptId: string;
   runIdx?: number;
   url: string;
+  sourcePath?: string;  // local path to .zip of generated source code
   toolVersion?: string;
   timing?: UserReportedTiming;
   cost?: UserReportedCost;
@@ -106,5 +109,10 @@ export async function createSubmissionArtifact(
   await prepareArtifactDir(paths);
   await writeJson(paths.submission, submission);
   await writePromptJson(paths, prompt);
+
+  if (opts.sourcePath && existsSync(opts.sourcePath)) {
+    await extractZip(opts.sourcePath, join(paths.root, 'source'));
+  }
+
   return { submission, prompt, paths };
 }

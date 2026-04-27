@@ -17,9 +17,11 @@ runs:
   - tool: lovable
     prompt: nimbus-notes-landing
     url: https://example-nimbus-abc.lovable.app/
-    # Optional:
-    # runIdx: 0
-    # toolVersion: 2026-W17
+    # Optional source ZIP — export from Lovable → GitHub and download, or use the
+    # tool's "Download code" option. Unlocks F6 (verbatim constraints), C1 (ESLint
+    # lint density), and C5 (uncompressed bundle size) scorers.
+    # source: ./source-exports/lovable-nimbus.zip
+    # Optional timing + cost:
     # promptSubmittedAt: 2026-04-24T18:00:00Z
     # firstRenderAt:    2026-04-24T18:00:45Z
     # workingBuildAt:   2026-04-24T18:01:10Z

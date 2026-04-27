@@ -8,6 +8,7 @@ const entrySchema = z.object({
   tool: z.enum(ALL_TOOLS as unknown as [ToolName, ...ToolName[]]),
   prompt: z.string().regex(/^[a-z0-9-]+$/, 'prompt must be kebab-case'),
   url: z.string().url(),
+  source: z.string().optional(),  // local path to .zip of the generated source code
   runIdx: z.number().int().nonnegative().default(0),
   toolVersion: z.string().optional(),
   promptSubmittedAt: z.string().datetime().optional(),

@@ -1,6 +1,8 @@
 import { loadConfig, type SubmissionConfigEntry } from '../core/config.ts';
 import { createSubmissionArtifact } from '../core/submission.ts';
 import type { UserReportedCost, UserReportedTiming } from '../core/types.ts';
+import { computeComposite, formatComposite } from './composite.ts';
+import { formatScorerDetail } from './format.ts';
 import { scoreSubmission } from './orchestrate.ts';
 import type { ScorerResult } from './types.ts';
 
@@ -48,6 +50,7 @@ async function runOne(
       promptId: entry.prompt,
       runIdx: entry.runIdx,
       url: entry.url,
+      sourcePath: entry.source,
       toolVersion: entry.toolVersion,
       timing: timingFromEntry(entry),
       cost: costFromEntry(entry),
@@ -62,10 +65,13 @@ async function runOne(
           const pass = e.result.passed === null ? 'N/A' : e.result.passed ? 'yes' : 'NO ';
           const score = e.result.score === null ? '  N/A' : e.result.score.toFixed(3);
           const elapsed = formatElapsed(e.elapsedMs);
-          process.stdout.write(`\r  ${e.name.padEnd(5)} ${pass}   ${score}   ${elapsed}\n`);
+          const detail = formatScorerDetail(e.name, e.result);
+          const suffix = detail ? `   ${detail}` : '';
+          process.stdout.write(`\r  ${e.name.padEnd(5)} ${pass}   ${score}   ${elapsed.padEnd(6)}${suffix}\n`);
         }
       },
     });
+    console.log(`  ${formatComposite(computeComposite(results))}`);
     return {
       tool: entry.tool,
       promptId: entry.prompt,

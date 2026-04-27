@@ -3,6 +3,8 @@ import { createSubmissionArtifact } from './core/submission.ts';
 import { ALL_TOOLS } from './core/types.ts';
 import type { ToolName, UserReportedCost, UserReportedTiming } from './core/types.ts';
 import { loadCorpus } from './prompts/schema.ts';
+import { computeComposite, formatComposite } from './scorers/composite.ts';
+import { formatScorerDetail } from './scorers/format.ts';
 import { scoreSubmission } from './scorers/orchestrate.ts';
 import { scoreAll } from './scorers/score-all.ts';
 import { generateReport } from './report/generate.ts';
@@ -66,6 +68,7 @@ interface SubmitOptions {
   tool: ToolName;
   prompt: string;
   url: string;
+  source?: string;
   run: number;
   toolVersion?: string;
   corpus: string;
@@ -84,6 +87,7 @@ program
   .requiredOption('-t, --tool <tool>', 'Tool name', parseToolName)
   .requiredOption('-p, --prompt <id>', 'Prompt id (must exist in corpus)')
   .requiredOption('-u, --url <url>', 'Deployed preview URL from the tool')
+  .option('-s, --source <path>', 'Path to .zip of the generated source code')
   .option('-r, --run <idx>', 'Run index', parseNonNegativeInt, 0)
   .option('--tool-version <ver>', 'Tool version (defaults to ISO week of today)')
   .option('-d, --corpus <dir>', 'Corpus directory', 'prompts/corpus')
@@ -100,6 +104,7 @@ program
       promptId: opts.prompt,
       runIdx: opts.run,
       url: opts.url,
+      sourcePath: opts.source,
       toolVersion: opts.toolVersion,
       timing: userReportedTimingFrom(opts),
       cost: userReportedCostFrom(opts),
@@ -120,7 +125,7 @@ program
   .argument('<dir>', 'Submission directory (contains submission.json + prompt.json)')
   .action(async (dir: string) => {
     console.log(`Scoring ${dir}`);
-    await scoreSubmission(dir, {
+    const { results } = await scoreSubmission(dir, {
       onProgress: (e) => {
         if (e.kind === 'scorer_start') {
           process.stdout.write(`  ${e.name.padEnd(5)} running…`);
@@ -128,10 +133,13 @@ program
           const pass = e.result.passed === null ? 'N/A' : e.result.passed ? 'yes' : 'NO ';
           const score = e.result.score === null ? '  N/A' : e.result.score.toFixed(3);
           const elapsed = formatElapsedForCli(e.elapsedMs);
-          process.stdout.write(`\r  ${e.name.padEnd(5)} ${pass}   ${score}   ${elapsed}\n`);
+          const detail = formatScorerDetail(e.name, e.result);
+          const suffix = detail ? `   ${detail}` : '';
+          process.stdout.write(`\r  ${e.name.padEnd(5)} ${pass}   ${score}   ${elapsed.padEnd(6)}${suffix}\n`);
         }
       },
     });
+    console.log(`  ${formatComposite(computeComposite(results))}`);
   });
 
 function formatElapsedForCli(ms: number): string {

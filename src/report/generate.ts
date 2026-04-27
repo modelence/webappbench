@@ -1,6 +1,7 @@
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Submission } from '../core/submission.ts';
+import { computeComposite } from '../scorers/composite.ts';
 import type { ScorerResult } from '../scorers/types.ts';
 
 interface RunSummary {
@@ -11,6 +12,7 @@ interface RunSummary {
   submittedAt: string;
   artifactUrl: string;
   scores: Record<string, ScorerResult>;
+  hasSource: boolean;
 }
 
 export async function generateReport(artifactsRoot: string, outFile: string): Promise<RunSummary[]> {
@@ -54,6 +56,7 @@ async function loadRun(runDir: string): Promise<RunSummary | null> {
     const scoresText = await readFile(join(runDir, 'scores.json'), 'utf8').catch(() => null);
     if (!scoresText) return null;
     const scores = JSON.parse(scoresText) as Record<string, ScorerResult>;
+    const hasSource = !!(scores['f6'] || scores['c1'] || scores['c5']);
     return {
       tool: submission.tool,
       promptId: submission.promptId,
@@ -62,44 +65,112 @@ async function loadRun(runDir: string): Promise<RunSummary | null> {
       submittedAt: submission.submittedAt,
       artifactUrl: submission.artifactUrl,
       scores,
+      hasSource,
     };
   } catch {
     return null;
   }
 }
 
-const DIMENSIONS = ['f1', 'f2', 'c3', 'c4', 'c9', 'cost'] as const;
+const BASE_DIMS = ['f1', 'f2', 'c3', 'c4', 'c9'] as const;
+const SOURCE_DIMS = ['f6', 'c1', 'c5'] as const;
+const ALL_DIMS = [...BASE_DIMS, ...SOURCE_DIMS, 'cost'] as const;
+type Dim = (typeof ALL_DIMS)[number];
+
+function scoreCell(score: ScorerResult | undefined, format: 'score' | 'pct' = 'score'): string {
+  if (!score) return `<td class="na">—</td>`;
+  if (score.score === null) return `<td class="na">N/A</td>`;
+  const cls = score.passed === true ? 'pass' : score.passed === false ? 'fail' : 'na';
+  const val = format === 'pct' ? (score.score * 100).toFixed(1) : score.score.toFixed(3);
+  return `<td class="${cls}">${val}</td>`;
+}
+
+function compositeCell(scores: Record<string, ScorerResult>): string {
+  const c = computeComposite(scores);
+  if (!c) return `<td class="na">—</td>`;
+  const pct = (c.score * 100).toFixed(1);
+  const cls = c.score >= 0.8 ? 'composite-high' : c.score >= 0.6 ? 'composite-mid' : 'composite-low';
+  return `<td class="composite ${cls}"><strong>${pct}</strong><span class="of"> / ${c.outOf}</span></td>`;
+}
+
+interface ToolAgg {
+  runs: number;
+  composite: number | null;
+  dims: Record<Dim, number | null>;
+}
+
+function summarizeByTool(runs: RunSummary[]): Map<string, ToolAgg> {
+  const map = new Map<string, ToolAgg>();
+  for (const r of runs) {
+    const agg = map.get(r.tool) ?? { runs: 0, composite: null, dims: Object.fromEntries(ALL_DIMS.map((d) => [d, null])) as Record<Dim, number | null> };
+    agg.runs += 1;
+    for (const d of ALL_DIMS) {
+      const s = r.scores[d]?.score;
+      if (typeof s === 'number') {
+        agg.dims[d] = agg.dims[d] === null ? s : agg.dims[d]! + s;
+      }
+    }
+    const c = computeComposite(r.scores);
+    if (c) agg.composite = agg.composite === null ? c.score : agg.composite + c.score;
+    map.set(r.tool, agg);
+  }
+  for (const agg of map.values()) {
+    for (const d of ALL_DIMS) {
+      if (agg.dims[d] !== null) agg.dims[d] = agg.dims[d]! / agg.runs;
+    }
+    if (agg.composite !== null) agg.composite /= agg.runs;
+  }
+  return map;
+}
 
 function renderHtml(runs: RunSummary[]): string {
-  const rows = runs
-    .map((r) => {
-      const cells = DIMENSIONS.map((d) => {
-        const score = r.scores[d];
-        if (!score) return `<td class="na">—</td>`;
-        if (score.score === null) return `<td class="na">N/A</td>`;
-        const cls = score.passed === true ? 'pass' : score.passed === false ? 'fail' : 'na';
-        return `<td class="${cls}">${score.score.toFixed(3)}</td>`;
-      }).join('');
-      return `<tr>
-        <td>${escape(r.tool)}</td>
-        <td>${escape(r.promptId)}</td>
-        <td><a href="${escape(r.artifactUrl)}" target="_blank" rel="noopener">link</a></td>
-        <td>${escape(r.toolVersion)}</td>
-        ${cells}
-      </tr>`;
-    })
-    .join('\n');
+  const anySource = runs.some((r) => r.hasSource);
+  const dimHeaders = [
+    '<th>F1 render</th>', '<th>F2 accept</th>', '<th>C3 a11y</th>', '<th>C4 perf</th>', '<th>C9 SEO</th>',
+    ...(anySource ? ['<th>F6 verbatim</th>', '<th>C1 lint</th>', '<th>C5 bundle</th>'] : []),
+    '<th>Cost</th>',
+  ];
+
+  const perRunRows = runs.map((r) => {
+    const c = compositeCell(r.scores);
+    const dimCells = [
+      ...BASE_DIMS.map((d) => scoreCell(r.scores[d])),
+      ...(anySource ? SOURCE_DIMS.map((d) => scoreCell(r.scores[d])) : []),
+      scoreCell(r.scores['cost']),
+    ].join('');
+    return `<tr>
+      ${c}
+      <td>${escape(r.tool)}</td>
+      <td>${escape(r.promptId)}</td>
+      <td><a href="${escape(r.artifactUrl)}" target="_blank" rel="noopener">↗</a></td>
+      <td class="ver">${escape(r.toolVersion)}</td>
+      ${dimCells}
+    </tr>`;
+  }).join('\n');
 
   const summary = summarizeByTool(runs);
-  const summaryRows = Object.entries(summary)
+  const summaryRows = [...summary.entries()]
+    .sort((a, b) => (b[1].composite ?? 0) - (a[1].composite ?? 0))
     .map(([tool, agg]) => {
-      const cells = DIMENSIONS.map((d) => {
-        const v = agg[d];
-        return v === null ? `<td class="na">—</td>` : `<td>${v.toFixed(3)}</td>`;
-      }).join('');
-      return `<tr><td>${escape(tool)}</td><td>${agg.runs}</td>${cells}</tr>`;
-    })
-    .join('\n');
+      const compositePct = agg.composite !== null ? `<strong>${(agg.composite * 100).toFixed(1)}</strong>` : '—';
+      const compositeCls = agg.composite !== null
+        ? agg.composite >= 0.8 ? 'composite composite-high' : agg.composite >= 0.6 ? 'composite composite-mid' : 'composite composite-low'
+        : 'na';
+      const dimCells = [
+        ...BASE_DIMS.map((d) => agg.dims[d] !== null ? `<td>${agg.dims[d]!.toFixed(3)}</td>` : `<td class="na">—</td>`),
+        ...(anySource ? SOURCE_DIMS.map((d) => agg.dims[d] !== null ? `<td>${agg.dims[d]!.toFixed(3)}</td>` : `<td class="na">—</td>`) : []),
+        agg.dims['cost'] !== null ? `<td>${agg.dims['cost']!.toFixed(3)}</td>` : `<td class="na">—</td>`,
+      ].join('');
+      return `<tr>
+        <td class="${compositeCls}">${compositePct}</td>
+        <td>${escape(tool)}</td>
+        <td>${agg.runs}</td>
+        ${dimCells}
+      </tr>`;
+    }).join('\n');
+
+  const summaryColCount = 3 + BASE_DIMS.length + (anySource ? SOURCE_DIMS.length : 0) + 1;
+  const perRunColCount = 4 + BASE_DIMS.length + (anySource ? SOURCE_DIMS.length : 0) + 1;
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -107,76 +178,51 @@ function renderHtml(runs: RunSummary[]): string {
 <meta charset="utf-8" />
 <title>AI Sitebuilder Benchmark — Leaderboard</title>
 <style>
-  body { font-family: -apple-system, system-ui, sans-serif; margin: 2rem; color: #1a1a1a; }
+  body { font-family: -apple-system, system-ui, sans-serif; margin: 2rem; color: #1a1a1a; max-width: 1400px; }
   h1 { margin-top: 0; }
   h2 { margin-top: 2.5rem; }
-  table { border-collapse: collapse; margin-bottom: 2rem; }
-  th, td { padding: .5rem .75rem; text-align: left; border-bottom: 1px solid #eee; font-variant-numeric: tabular-nums; }
+  table { border-collapse: collapse; margin-bottom: 2rem; width: 100%; }
+  th, td { padding: .45rem .65rem; text-align: left; border-bottom: 1px solid #eee; font-variant-numeric: tabular-nums; white-space: nowrap; }
   th { font-weight: 600; background: #f7f7f5; }
-  td.pass { background: rgba(0, 128, 0, .08); }
-  td.fail { background: rgba(200, 0, 0, .08); }
-  td.na { color: #888; }
-  a { color: #2f6f4f; }
-  .caveat { background: #fff9db; padding: .75rem 1rem; border-left: 3px solid #ffc107; font-size: .9rem; }
+  td.pass { background: rgba(0,128,0,.07); }
+  td.fail { background: rgba(200,0,0,.07); }
+  td.na { color: #aaa; }
+  td.ver { color: #888; font-size: .85em; }
+  td.composite { font-size: 1.1em; }
+  td.composite-high { background: rgba(0,160,0,.12); }
+  td.composite-mid  { background: rgba(255,180,0,.14); }
+  td.composite-low  { background: rgba(200,0,0,.10); }
+  .of { font-size: .75em; color: #888; }
+  a { color: #2f6f4f; text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .caveat { background: #fff9db; padding: .75rem 1rem; border-left: 3px solid #ffc107; font-size: .9rem; margin-bottom: 1.5rem; }
 </style>
 </head>
 <body>
 <h1>AI Sitebuilder Benchmark</h1>
-<p>Generated ${new Date().toISOString()} from <code>${escape(runs.length.toString())}</code> scored run(s).</p>
-<p class="caveat">v0.1 — deterministic scorers only. Cost (T1/T2) is user self-reported, not instrumented.</p>
+<p>Generated ${new Date().toISOString()} · ${escape(String(runs.length))} scored run(s).</p>
+<p class="caveat">v0.1 · deterministic scorers · Score = mean of non-null quality scorers (cost excluded) · higher is better · /100</p>
 
-<h2>By tool (mean of scored runs)</h2>
+<h2>Leaderboard</h2>
 <table>
-  <thead><tr><th>Tool</th><th>Runs</th><th>F1 render</th><th>F2 accept</th><th>C3 a11y</th><th>C4 perf</th><th>C9 SEO</th><th>Cost</th></tr></thead>
-  <tbody>${summaryRows || '<tr><td colspan="8">No runs.</td></tr>'}</tbody>
+  <thead><tr>
+    <th>Score</th><th>Tool</th><th>Runs</th>
+    ${dimHeaders.join('')}
+  </tr></thead>
+  <tbody>${summaryRows || `<tr><td colspan="${summaryColCount}">No runs yet.</td></tr>`}</tbody>
 </table>
 
 <h2>Per run</h2>
 <table>
-  <thead><tr><th>Tool</th><th>Prompt</th><th>URL</th><th>Version</th><th>F1</th><th>F2</th><th>C3</th><th>C4</th><th>C9</th><th>Cost</th></tr></thead>
-  <tbody>${rows || '<tr><td colspan="10">No runs.</td></tr>'}</tbody>
+  <thead><tr>
+    <th>Score</th><th>Tool</th><th>Prompt</th><th>URL</th>
+    ${dimHeaders.join('')}
+  </tr></thead>
+  <tbody>${perRunRows || `<tr><td colspan="${perRunColCount}">No runs yet.</td></tr>`}</tbody>
 </table>
 </body>
 </html>
 `;
-}
-
-type Agg = { runs: number } & Record<(typeof DIMENSIONS)[number], number | null>;
-
-function summarizeByTool(runs: RunSummary[]): Record<string, Agg> {
-  const byTool: Record<string, Agg> = {};
-  for (const r of runs) {
-    const key = r.tool;
-    const existing = byTool[key] ?? initAgg();
-    existing.runs += 1;
-    for (const d of DIMENSIONS) {
-      const s = r.scores[d]?.score;
-      if (typeof s === 'number') {
-        const prev = existing[d];
-        existing[d] = prev === null ? s : prev + s;
-      }
-    }
-    byTool[key] = existing;
-  }
-  for (const [, agg] of Object.entries(byTool)) {
-    for (const d of DIMENSIONS) {
-      const prev = agg[d];
-      if (prev !== null) agg[d] = prev / agg.runs;
-    }
-  }
-  return byTool;
-}
-
-function initAgg(): Agg {
-  return {
-    runs: 0,
-    f1: null,
-    f2: null,
-    c3: null,
-    c4: null,
-    c9: null,
-    cost: null,
-  };
 }
 
 function escape(s: string): string {

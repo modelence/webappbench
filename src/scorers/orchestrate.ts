@@ -1,3 +1,4 @@
+import { access } from 'node:fs/promises';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { chromium } from '@playwright/test';
@@ -6,8 +7,11 @@ import { readSubmission } from '../core/submission.ts';
 import type { Prompt } from '../core/types.ts';
 import { runF1, F1_VERSION } from './functional/f1-render.ts';
 import { runF2, F2_VERSION } from './functional/f2-acceptance.ts';
+import { runF6, F6_VERSION } from './functional/f6-verbatim.ts';
+import { runC1, C1_VERSION } from './code-quality/c1-eslint.ts';
 import { runC3, C3_VERSION } from './code-quality/c3-axe.ts';
 import { runC4, C4_VERSION } from './code-quality/c4-lighthouse.ts';
+import { runC5, C5_VERSION } from './code-quality/c5-bundle-size.ts';
 import { runC9, C9_VERSION } from './code-quality/c9-seo.ts';
 import { runCost, COST_VERSION } from './cost.ts';
 import type { ScorerContext, ScorerResult } from './types.ts';
@@ -47,7 +51,9 @@ export async function scoreSubmission(
   });
   const page = await context.newPage();
 
-  const ctx: ScorerContext = { submission, prompt, paths, page };
+  const sourceDir = join(artifactDir, 'source');
+  const hasSource = await access(sourceDir).then(() => true).catch(() => false);
+  const ctx: ScorerContext = { submission, prompt, paths, page, sourceDir: hasSource ? sourceDir : undefined };
   const results: Record<string, ScorerResult> = {};
 
   const runScorer = async (
@@ -87,6 +93,12 @@ export async function scoreSubmission(
       results['c9'] = { ...skip, scorer: 'c9', version: C9_VERSION };
     }
     results['cost'] = await runScorer('cost', () => runCost(submission, paths));
+
+    if (hasSource) {
+      results['f6'] = await runScorer('f6', () => runF6(sourceDir, ctx.prompt.verbatimConstraints));
+      results['c1'] = await runScorer('c1', () => runC1(sourceDir));
+      results['c5'] = await runScorer('c5', () => runC5(sourceDir));
+    }
   } finally {
     await context.close();
     await browser.close();
@@ -101,8 +113,11 @@ export async function scoreSubmission(
     scorerVersions: {
       f1: F1_VERSION,
       f2: F2_VERSION,
+      ...(hasSource && { f6: F6_VERSION }),
+      ...(hasSource && { c1: C1_VERSION }),
       c3: C3_VERSION,
       c4: C4_VERSION,
+      ...(hasSource && { c5: C5_VERSION }),
       c9: C9_VERSION,
       cost: COST_VERSION,
     },

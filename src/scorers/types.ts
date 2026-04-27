@@ -8,6 +8,7 @@ export interface ScorerContext {
   prompt: Prompt;
   paths: ArtifactPaths;
   page: Page;
+  sourceDir?: string;  // extracted source directory — present only when user supplied a ZIP
 }
 
 export interface ScorerResult {
