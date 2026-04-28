@@ -42,10 +42,15 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
 
       case 'v2': {
         const checks = (d['checks'] as Array<Record<string, unknown>>) ?? [];
-        const passed = checks.filter((c) => c['passed'] === true).length;
-        const failures = checks.filter((c) => c['passed'] === false).map((c) => String(c['name']));
-        const suffix = failures.length ? ` — failed: ${failures.join(', ')}` : '';
-        return `${passed}/${checks.length} checks${suffix}`;
+        const scorable = checks.filter((c) => c['passed'] !== null && c['passed'] !== undefined);
+        const passed = scorable.filter((c) => c['passed'] === true).length;
+        const failures = scorable.filter((c) => c['passed'] === false).map((c) => String(c['name']));
+        const skipped = checks.length - scorable.length;
+        const suffixParts: string[] = [];
+        if (failures.length) suffixParts.push(`failed: ${failures.join(', ')}`);
+        if (skipped > 0) suffixParts.push(`${skipped} skipped`);
+        const suffix = suffixParts.length ? ` — ${suffixParts.join(' · ')}` : '';
+        return `${passed}/${scorable.length} checks${suffix}`;
       }
 
       case 'v1': {

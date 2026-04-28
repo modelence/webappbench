@@ -220,7 +220,7 @@ score = (mustPassed + 0.5 × shouldPassed) / (mustTotal + 0.5 × shouldTotal)
 
 **Research note:** Axe + Lighthouse catch only ~30–40% of true accessibility violations. The research recommends complementing with a manual spot rubric on 10% of runs, and running in both light/dark modes with `:focus-visible` forced. These are not automated in v0.1.
 
-**Gap vs research:** Single-state scan only. The research also calls out CSS signals (`:focus-visible` presence, `@media (prefers-reduced-motion)`) as low-cost a11y proxies that should be added to C1 or a separate sub-check.
+**Gap vs research:** Single-state scan only. (CSS signals — `:focus-visible`, `@media (prefers-reduced-motion)` — are now covered in V2 as modern-scaffolding proxies; C3 itself remains a single-state axe scan.)
 
 ---
 
@@ -376,27 +376,35 @@ See `prompts/corpus/saas-pricing-page.yaml` for a worked example.
 
 ### V2 — Design heuristics
 
-**What it measures:** Four automated design principle checks via browser evaluation.
+**What it measures:** Eight automated design principle checks via browser evaluation, split between layout heuristics and CSS convention signals.
 
-**How:**
+**Layout heuristics (4):**
 1. **Whitespace:** ≥25% of viewport is background-colored (10×10 grid sample)
 2. **Contrast:** ≥80% of text nodes pass WCAG AA (4.5:1 normal, 3:1 large ≥18px or ≥14px+bold)
 3. **Font size:** ≥80% of text nodes ≥14px
 4. **Line length:** ≥70% of block elements ≤85 chars wide
 
-Score = passed checks / 4. Passed if score ≥ 0.75.
+**CSS convention signals (4) — proxies for modern scaffolding (v0.2.0):**
+5. **`box_sizing`** — ≥80% of the first 200 sampled elements use `box-sizing: border-box`. Modern resets (Tailwind preflight, normalize.css, custom CSS resets) apply this universally; ad-hoc CSS often misses it. Reads `getComputedStyle(el).boxSizing` so it always runs regardless of CORS.
+6. **`reduced_motion`** — at least one `@media (prefers-reduced-motion)` query exists in any same-origin stylesheet. A motion-respect indicator that doubles as an accessibility/polish signal.
+7. **`custom_properties`** — at least 5 distinct CSS custom properties (`--*`) declared across stylesheets. Calibrated against Tailwind, shadcn, and MUI scaffolds, which all declare hundreds. A page with zero custom properties is using ad-hoc CSS without design tokens.
+8. **`focus_visible`** — at least one rule selector contains `:focus-visible`. Modern accessibility scaffolds always style `:focus-visible` separately from `:focus` to avoid showing the focus ring on mouse clicks; absence indicates outdated CSS.
 
-**Within-dimension weight (research):** 25% of Visual dimension.
+**How:** All 8 checks run in a single `page.evaluate()` call. The CSS-rule checks (6, 7, 8) walk `document.styleSheets`; cross-origin stylesheets throw on `cssRules` access and are skipped silently. If every stylesheet is CORS-blocked the three rule checks return `passed: null` and drop out of the score calculation entirely (so the score doesn't unfairly penalize sites whose only stylesheets are CDN-hosted).
 
-**Research spec (additional heuristics not in v0.1):**
+Score = (passed scorable checks) / (scorable checks). Passed if score ≥ 0.75.
+
+**Within-dimension weight:** 30% of Visual (research has 25%; redistributed up because V3/V5 aren't implemented).
+
+**Smoke-test results (2026-04):** A bare-bones AI-generated landing page passed 5/8 (whitespace, contrast, font size, line length, box-sizing) and failed the three modern-scaffolding checks. Vercel.com passed 8/8 with 716 distinct custom properties detected. The four new checks discriminate cleanly between basic and polished output.
+
+**Research spec (additional heuristics not in v0.2):**
 - Typographic hierarchy: distinct (fontSize, fontWeight) tuples counted, ratio cap ≤5
 - Color count: ≤6 dominant colors via k-means on sampled pixels
 - Color harmony: Delta-E distances between dominant colors
 - Alignment grid consistency
 
-**Gap vs research:** Current implementation covers whitespace, contrast, font size, and line length. Missing: typographic hierarchy depth, color count/harmony, grid alignment.
-
-**Research also specifies CSS convention signals** (deterministic, ~10 lines each): `box-sizing: border-box` presence, `@media (prefers-reduced-motion)` respect, CSS custom-properties usage (`--*`), `:focus-visible` presence. These should be added to V2 or C3.
+**Gap vs research:** Typographic hierarchy depth, color count/harmony, and grid alignment remain unimplemented.
 
 ---
 
@@ -590,7 +598,7 @@ Sub-score: 1 (no findings) or 0 (any finding).
 | Add disagreement flagging logic (>1 point divergence) for the dual-judge scorers | Surfaces low-confidence judgments for manual review |
 | Add dynamic per-prompt F1 timeout from `baselineBuildSeconds` in prompt YAML | Prevents false-positive timeouts on complex prompts |
 | Implement V3 reference-design fidelity (CLIP + Block-Match + Text + Position + Color) | Enables reference-image prompts (Tier 3 "make it look like Linear") |
-| Add typographic hierarchy, color count/harmony, and CSS signal checks to V2 | Closes gap between current 4-check heuristic and full research spec |
+| Add typographic hierarchy and color count/harmony to V2 | Remaining V2 gaps after the v0.2 CSS-signal additions; covers typographic depth and palette harmony |
 | Implement harness-instrumented timing layer (replaces self-reported cost) | Enables automated leaderboard refreshes without manual timing input |
 | Krippendorff's α calibration pipeline for V1, F4, and C7 | Validates judge reliability against human ratings |
 | Duplication detection (`jscpd`) in C6 | Completes AST complexity sub-checks |
@@ -628,7 +636,7 @@ Sub-score: 1 (no findings) or 0 (any finding).
 | c8 | `code-quality/c8-install.ts` | 0.1.0 | Detects npm/pnpm/yarn from lockfile; runs strict `ci`/`--frozen-lockfile` in temp dir; 240s timeout |
 | c9 | `code-quality/c9-seo.ts` | 0.1.0 | 10 configurable checks |
 | v1 | `visual/v1-judge.ts` | 0.2.0 | Single judge; 8 visual + 3 copy-quality defaults + per-prompt `visual_checklist.extra`; copy-quality skipped when `placeholder_copy: true` |
-| v2 | `visual/v2-design.ts` | 0.1.0 | 4 checks: whitespace, contrast, font size, line length |
+| v2 | `visual/v2-design.ts` | 0.2.0 | 8 checks: 4 layout (whitespace, contrast, font size, line length) + 4 CSS conventions (box-sizing, prefers-reduced-motion, custom properties, :focus-visible). CSS-rule checks skip when stylesheets are CORS-blocked. |
 | v4 | `visual/v4-responsive.ts` | 0.1.0 | 3 viewports; horizontal overflow + touch targets |
 | s1 | `security/s1-secrets.ts` | 0.2.0 | Two sub-checks: 8-pattern source secrets scan + 6-header deployed audit; mean of whichever ran |
 | s2 | `security/s2-auth.ts` | 0.1.0 | 13 patterns; client-side awareness; weighted severity |

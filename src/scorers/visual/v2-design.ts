@@ -1,6 +1,6 @@
 import type { ScorerContext, ScorerResult } from '../types.ts';
 
-export const V2_VERSION = '0.1.0';
+export const V2_VERSION = '0.2.0';
 
 interface DesignFacts {
   // Whitespace: fraction of viewport that is background-colored (sampled grid)
@@ -15,11 +15,26 @@ interface DesignFacts {
   // Line length: fraction of block text nodes with line width <= 80ch
   lineLengthPassRate: number;
   lineLengthSampled: number;
+  // CSS convention signals (proxies for modern scaffolding):
+  // box-sizing: fraction of sampled elements using border-box
+  boxSizingBorderBoxRate: number;
+  boxSizingSampled: number;
+  // prefers-reduced-motion: at least one @media query found in any same-origin stylesheet
+  hasReducedMotionQuery: boolean;
+  // CSS custom properties: count of distinct --* declarations across stylesheets
+  customPropertyCount: number;
+  // :focus-visible: at least one rule selector contains :focus-visible
+  hasFocusVisibleRule: boolean;
+  // True when at least one stylesheet was readable; if all are CORS-blocked
+  // the three CSS-rule-based checks return null instead of false.
+  stylesheetsReadable: boolean;
 }
 
 interface DesignCheck {
   name: string;
-  passed: boolean;
+  // null when the check could not run (e.g. CSS-rule checks when every
+  // stylesheet was CORS-blocked). Null checks are excluded from the score.
+  passed: boolean | null;
   value: number;
   threshold: number;
   detail: string;
@@ -95,6 +110,78 @@ export async function runV2(ctx: ScorerContext): Promise<ScorerResult> {
         }
       }
 
+      // box-sizing sample: deterministically pick the first 200 elements via TreeWalker.
+      // The original document.querySelectorAll('*') would also work but on large pages
+      // it is wasteful; 200 is plenty to distinguish "applied via reset" from "ad-hoc".
+      let boxSizingSampled = 0, boxSizingBorderBox = 0;
+      const elWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
+      let elNode = elWalker.nextNode();
+      while (elNode && boxSizingSampled < 200) {
+        const cs = window.getComputedStyle(elNode);
+        boxSizingSampled++;
+        if (cs.boxSizing === 'border-box') boxSizingBorderBox++;
+        elNode = elWalker.nextNode();
+      }
+
+      // Stylesheet walk: detect prefers-reduced-motion media query, count
+      // distinct CSS custom properties (--*), and look for :focus-visible rules.
+      // Cross-origin stylesheets (e.g. Google Fonts) throw on .cssRules access;
+      // we skip those silently and only set stylesheetsReadable=true if at least
+      // one sheet was inspectable.
+      let stylesheetsReadable = false;
+      let hasReducedMotionQuery = false;
+      let hasFocusVisibleRule = false;
+      const customProps = new Set();
+
+      const visitRule = (rule) => {
+        const t = rule.type;
+        // CSSStyleRule = 1
+        if (t === 1 && rule.selectorText) {
+          if (rule.selectorText.indexOf(':focus-visible') !== -1) {
+            hasFocusVisibleRule = true;
+          }
+          if (rule.style) {
+            for (let i = 0; i < rule.style.length; i++) {
+              const prop = rule.style.item(i);
+              if (prop && prop.startsWith('--')) customProps.add(prop);
+            }
+          }
+        }
+        // CSSMediaRule = 4
+        if (t === 4 && rule.media && rule.media.mediaText) {
+          if (rule.media.mediaText.indexOf('prefers-reduced-motion') !== -1) {
+            hasReducedMotionQuery = true;
+          }
+        }
+        // Recurse into grouping rules (@media, @supports, @layer).
+        if (rule.cssRules) {
+          for (let i = 0; i < rule.cssRules.length; i++) visitRule(rule.cssRules[i]);
+        }
+      };
+
+      for (let i = 0; i < document.styleSheets.length; i++) {
+        const sheet = document.styleSheets[i];
+        try {
+          const rules = sheet.cssRules;
+          if (!rules) continue;
+          stylesheetsReadable = true;
+          for (let j = 0; j < rules.length; j++) visitRule(rules[j]);
+        } catch (e) {
+          // CORS-blocked sheet — skip silently.
+        }
+      }
+
+      // Inline style attributes can also declare --vars (Tailwind/shadcn theme overrides),
+      // count those toward the custom-property total.
+      const allEls = document.querySelectorAll('[style]');
+      for (let i = 0; i < allEls.length; i++) {
+        const decl = allEls[i].style;
+        for (let j = 0; j < decl.length; j++) {
+          const prop = decl.item(j);
+          if (prop && prop.startsWith('--')) customProps.add(prop);
+        }
+      }
+
       return {
         backgroundRatio,
         contrastPassRate: contrastSampled > 0 ? contrastPassed / contrastSampled : 1,
@@ -104,6 +191,12 @@ export async function runV2(ctx: ScorerContext): Promise<ScorerResult> {
         fontSizeSampled,
         lineLengthPassRate: lineLengthSampled > 0 ? lineLengthPassed / lineLengthSampled : 1,
         lineLengthSampled,
+        boxSizingBorderBoxRate: boxSizingSampled > 0 ? boxSizingBorderBox / boxSizingSampled : 0,
+        boxSizingSampled,
+        hasReducedMotionQuery,
+        customPropertyCount: customProps.size,
+        hasFocusVisibleRule,
+        stylesheetsReadable,
       };
     })()`);
 
@@ -136,10 +229,60 @@ export async function runV2(ctx: ScorerContext): Promise<ScorerResult> {
         threshold: 0.7,
         detail: `${(facts.lineLengthPassRate * 100).toFixed(0)}% block elements ≤85ch wide`,
       },
+      // ── CSS convention signals (proxies for modern scaffolding) ──
+      {
+        name: 'box_sizing',
+        passed: facts.boxSizingSampled > 0 ? facts.boxSizingBorderBoxRate >= 0.8 : null,
+        value: facts.boxSizingBorderBoxRate,
+        threshold: 0.8,
+        detail: facts.boxSizingSampled > 0
+          ? `${(facts.boxSizingBorderBoxRate * 100).toFixed(0)}% of ${facts.boxSizingSampled} elements use border-box`
+          : 'no elements sampled',
+      },
+      {
+        // Reduced-motion media query: present in stylesheet rules.
+        name: 'reduced_motion',
+        passed: facts.stylesheetsReadable ? facts.hasReducedMotionQuery : null,
+        value: facts.hasReducedMotionQuery ? 1 : 0,
+        threshold: 1,
+        detail: !facts.stylesheetsReadable
+          ? 'no readable stylesheets'
+          : facts.hasReducedMotionQuery
+          ? '@media (prefers-reduced-motion) found'
+          : 'no @media (prefers-reduced-motion) rule',
+      },
+      {
+        // CSS custom properties: ≥5 distinct --* declarations is a reasonable
+        // "design tokens / themed scaffold" threshold (Tailwind, shadcn, MUI all hit this).
+        name: 'custom_properties',
+        passed: facts.stylesheetsReadable ? facts.customPropertyCount >= 5 : null,
+        value: facts.customPropertyCount,
+        threshold: 5,
+        detail: !facts.stylesheetsReadable
+          ? 'no readable stylesheets'
+          : `${facts.customPropertyCount} distinct CSS custom properties (need ≥5)`,
+      },
+      {
+        // :focus-visible: at least one rule selector references it. Modern
+        // accessibility scaffolds always include focus-visible styling separately
+        // from :focus to avoid showing the ring on mouse clicks.
+        name: 'focus_visible',
+        passed: facts.stylesheetsReadable ? facts.hasFocusVisibleRule : null,
+        value: facts.hasFocusVisibleRule ? 1 : 0,
+        threshold: 1,
+        detail: !facts.stylesheetsReadable
+          ? 'no readable stylesheets'
+          : facts.hasFocusVisibleRule
+          ? ':focus-visible rule found'
+          : 'no :focus-visible rule',
+      },
     ];
 
-    const passed = checks.filter((c) => c.passed).length;
-    const score = passed / checks.length;
+    // Null checks (CSS rules unreadable due to CORS) drop out of the score
+    // calculation rather than counting as failures.
+    const scorable = checks.filter((c) => c.passed !== null);
+    const passed = scorable.filter((c) => c.passed === true).length;
+    const score = scorable.length === 0 ? 0 : passed / scorable.length;
 
     return {
       scorer: 'v2',
@@ -152,6 +295,14 @@ export async function runV2(ctx: ScorerContext): Promise<ScorerResult> {
         contrastPassRate: facts.contrastPassRate,
         readableFontRate: facts.readableFontRate,
         lineLengthPassRate: facts.lineLengthPassRate,
+        boxSizingBorderBoxRate: facts.boxSizingBorderBoxRate,
+        boxSizingSampled: facts.boxSizingSampled,
+        hasReducedMotionQuery: facts.hasReducedMotionQuery,
+        customPropertyCount: facts.customPropertyCount,
+        hasFocusVisibleRule: facts.hasFocusVisibleRule,
+        stylesheetsReadable: facts.stylesheetsReadable,
+        scorableChecks: checks.filter((c) => c.passed !== null).length,
+        totalChecks: checks.length,
         elapsedMs: Date.now() - start,
       },
     };
