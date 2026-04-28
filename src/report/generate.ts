@@ -72,9 +72,18 @@ async function loadRun(runDir: string): Promise<RunSummary | null> {
   }
 }
 
-const BASE_DIMS = ['f1', 'f2', 'f5', 'c3', 'v1', 'v2', 'v4', 'c4', 'c9'] as const;
-const SOURCE_DIMS = ['f6', 'c1', 'c2', 'c5', 'c6', 'c7', 'c8'] as const;
-const ALL_DIMS = [...BASE_DIMS, ...SOURCE_DIMS, 'cost'] as const;
+// Ordered numerically within each letter group: f → c → v → s → cost.
+// Matches the console output order in src/scorers/progress.ts.
+const ALL_DIMS = [
+  'f1', 'f2', 'f4', 'f5', 'f6',
+  'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c9',
+  'v1', 'v2', 'v4',
+  's1', 's2', 's3',
+  'cost',
+] as const;
+// Dimensions that require an extracted source ZIP — used to hide entire columns
+// when no submission in the report has source attached.
+const SOURCE_ONLY_DIMS = new Set(['f6', 'c1', 'c2', 'c5', 'c6', 'c7', 's1', 's2', 's3']);
 type Dim = (typeof ALL_DIMS)[number];
 
 
@@ -111,6 +120,7 @@ function summarizeByTool(runs: RunSummary[]): Map<string, ToolAgg> {
 const METRIC_META: Record<string, { label: string; group: string; desc: string }> = {
   f1: { label: 'F1 render',      group: 'Functional',    desc: 'Page loads with HTTP 2xx and non-empty body within 30 s. The baseline — a failing site scores 0 on all downstream metrics.' },
   f2: { label: 'F2 acceptance',  group: 'Functional',    desc: 'Per-prompt checklist of must-have and should-have requirements, executed as Playwright assertions (roles, labels, counts). Weighted: must-have failures penalise more than should-have.' },
+  f4: { label: 'F4 intent',      group: 'Functional',    desc: 'LLM judge over screenshots scoring functional intent on 4 criteria 1–5: intent match, feature completeness, content relevance, flow coherence. Also lists prompt-named features absent from the page.' },
   f5: { label: 'F5 errors',      group: 'Functional',    desc: 'Console errors, uncaught JS exceptions, and 4xx/5xx network responses collected during the full scoring session. 0 errors = 1.0; decays linearly to 0 at 10+ errors.' },
   f6: { label: 'F6 verbatim',    group: 'Functional',    desc: 'Exact string constraints specified in the prompt (e.g. "Get started", "Nimbus Notes") must appear verbatim in the rendered page. Source-only scorer.' },
   c1: { label: 'C1 lint',        group: 'Code Quality',  desc: 'ESLint with typescript-eslint recommended rules run over the source ZIP. Score decays linearly from 0 errors/1k LOC (1.0) to 20+ errors/1k LOC (0). Source-only.' },
@@ -119,12 +129,14 @@ const METRIC_META: Record<string, { label: string; group: string; desc: string }
   c4: { label: 'C4 perf',        group: 'Code Quality',  desc: 'Lighthouse performance score (mobile throttled, median of 3 runs). Composite of FCP, LCP, TBT, CLS, Speed Index.' },
   c5: { label: 'C5 bundle',      group: 'Code Quality',  desc: 'Uncompressed JS + CSS source size. Full marks up to 150 KB; linear penalty up to 1 MB; 0 above 1 MB. Source-only. Does not account for tree-shaking.' },
   c6: { label: 'C6 complexity',  group: 'Code Quality',  desc: 'Cognitive complexity via eslint-plugin-sonarjs. Functions exceeding threshold 15 are flagged. Score decays from 0 violations/1k LOC (1.0) to 10+/1k (0). Source-only.' },
-  c7: { label: 'C7 audit',       group: 'Code Quality',  desc: 'npm audit CVE count from the source lockfile. Weighted: critical×10 + high×3 + moderate×1 + low×0.1. Score decays to 0 at 20 weighted penalty points. Source-only.' },
-  c8: { label: 'C8 secrets',     group: 'Code Quality',  desc: 'Regex scan for leaked credentials: OpenAI/Anthropic API keys, AWS access keys, GitHub PATs, PEM headers, hardcoded passwords. Any match = 0. Source-only.' },
+  c7: { label: 'C7 maintain',    group: 'Code Quality',  desc: 'LLM judge over a sampled source excerpt scoring maintainability on 5 criteria 1–5: naming, separation of concerns, component reuse, prop typing, secret handling. Source-only.' },
   c9: { label: 'C9 SEO',         group: 'Code Quality',  desc: 'Deterministic DOM checks: title length (10–70 chars), meta description (50–300 chars), canonical URL, OG tags (title/description/type), html[lang], heading hierarchy.' },
   v1: { label: 'V1 visual',      group: 'Visual',        desc: 'MLLM visual judge (Gemini 2.5 Pro via OpenRouter). 8 criteria scored 1–5: visual hierarchy, typography, color harmony, whitespace, brand fit, CTA prominence, mobile layout, overall polish. Normalised to 0–1.' },
   v2: { label: 'V2 design',      group: 'Visual',        desc: 'Deterministic in-browser design heuristics: whitespace ratio (≥25% background), WCAG AA contrast pass rate (≥80% of text nodes), readable font sizes (≥80% ≥14px), line length (≥70% blocks ≤85ch).' },
   v4: { label: 'V4 responsive',  group: 'Visual',        desc: 'Playwright viewport tests at 360×800 (mobile), 768×1024 (tablet), 1440×900 (desktop). Checks: no horizontal overflow at each breakpoint + mobile touch targets ≥44px. 4 checks total.' },
+  s1: { label: 'S1 secrets',     group: 'Security',      desc: 'Regex scan for leaked credentials: OpenAI/Anthropic API keys, AWS access keys, GitHub PATs, PEM headers, hardcoded passwords. Any match = 0. Source-only.' },
+  s2: { label: 'S2 auth',        group: 'Security',      desc: 'Auth-pattern scanner for AI-sitebuilder failures: Supabase service-role keys in client code, RLS disabled, JWT decode without verification, Firebase test mode, hardcoded admin emails/passwords. Severity-weighted; critical=10, high=5, medium=2 pts; decay to 0 at 20 pts. Source-only.' },
+  s3: { label: 'S3 vulns',       group: 'Security',      desc: 'npm audit CVE count from the source lockfile. Weighted: critical×10 + high×3 + moderate×1 + low×0.1. Score decays to 0 at 20 weighted penalty points. Source-only.' },
   cost: { label: 'Cost',         group: 'Cost',          desc: 'Informational only — not included in composite score. Self-reported by user at submission: TTFR (time to first render), TTWB (time to working build), USD estimate.' },
 };
 
@@ -132,16 +144,15 @@ const GROUP_COLORS: Record<string, string> = {
   Functional:   '#3b82f6',
   'Code Quality': '#8b5cf6',
   Visual:       '#ec4899',
+  Security:     '#f97316',
   Cost:         '#6b7280',
 };
 
 function renderHtml(runs: RunSummary[]): string {
   const anySource = runs.some((r) => r.hasSource);
-  const visibleDims: Dim[] = [
-    ...BASE_DIMS,
-    ...(anySource ? SOURCE_DIMS : [] as unknown as typeof SOURCE_DIMS),
-    'cost' as Dim,
-  ];
+  const visibleDims: Dim[] = ALL_DIMS.filter(
+    (d) => anySource || !SOURCE_ONLY_DIMS.has(d),
+  );
 
   const thWithTooltip = (dim: Dim) => {
     const m = METRIC_META[dim];
@@ -428,6 +439,7 @@ function renderHtml(runs: RunSummary[]): string {
   .group-Functional   { background: rgba(59,130,246,.15); color: #93c5fd; }
   .group-CodeQuality  { background: rgba(139,92,246,.15); color: #c4b5fd; }
   .group-Visual       { background: rgba(236,72,153,.15); color: #f9a8d4; }
+  .group-Security     { background: rgba(249,115,22,.15); color: #fdba74; }
   .group-Cost         { background: rgba(107,114,128,.15); color: #d1d5db; }
 
   /* ── Footer ── */

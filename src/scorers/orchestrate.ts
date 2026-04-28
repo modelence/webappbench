@@ -8,6 +8,7 @@ import type { Prompt } from '../core/types.ts';
 import { runF1, F1_VERSION } from './functional/f1-render.ts';
 import { runF2, F2_VERSION } from './functional/f2-acceptance.ts';
 import { attachErrorCollector, scoreF5, F5_VERSION } from './functional/f5-errors.ts';
+import { runF4, F4_VERSION } from './functional/f4-judge.ts';
 import { runF6, F6_VERSION } from './functional/f6-verbatim.ts';
 import { runC1, C1_VERSION } from './code-quality/c1-eslint.ts';
 import { runC2, C2_VERSION } from './code-quality/c2-types.ts';
@@ -15,6 +16,7 @@ import { runC3, C3_VERSION } from './code-quality/c3-axe.ts';
 import { runC4, C4_VERSION } from './code-quality/c4-lighthouse.ts';
 import { runC5, C5_VERSION } from './code-quality/c5-bundle-size.ts';
 import { runC6, C6_VERSION } from './code-quality/c6-complexity.ts';
+import { runC7, C7_VERSION } from './code-quality/c7-maintainability.ts';
 import { runS1, S1_VERSION } from './security/s1-secrets.ts';
 import { runS2, S2_VERSION } from './security/s2-auth.ts';
 import { runS3, S3_VERSION } from './security/s3-vuln.ts';
@@ -95,6 +97,7 @@ export async function scoreSubmission(
       await page.screenshot({ path: join(paths.screenshots, 'mid-scroll.png'), fullPage: false }).catch(() => undefined);
       results['c3'] = await runScorer('c3', () => runC3(ctx));
       results['c9'] = await runScorer('c9', () => runC9(ctx));
+      results['f4'] = await runScorer('f4', () => runF4(ctx));
       results['v1'] = await runScorer('v1', () => runV1(ctx));
       results['v2'] = await runScorer('v2', () => runV2(ctx));
       results['v4'] = await runScorer('v4', () => runV4(ctx));
@@ -109,6 +112,7 @@ export async function scoreSubmission(
         details: { reason: 'F1 render failed — downstream scorers skipped' },
       };
       results['f2'] = { ...skip, scorer: 'f2', version: F2_VERSION };
+      results['f4'] = { ...skip, scorer: 'f4', version: F4_VERSION };
       results['f5'] = { ...skip, scorer: 'f5', version: F5_VERSION };
       results['c3'] = { ...skip, scorer: 'c3', version: C3_VERSION };
       results['v1'] = { ...skip, scorer: 'v1', version: V1_VERSION };
@@ -125,6 +129,7 @@ export async function scoreSubmission(
       results['c2'] = await runScorer('c2', () => runC2(sourceDir));
       results['c5'] = await runScorer('c5', () => runC5(sourceDir));
       results['c6'] = await runScorer('c6', () => runC6(sourceDir));
+      results['c7'] = await runScorer('c7', () => runC7(ctx));
       results['s1'] = await runScorer('s1', () => runS1(sourceDir));
       results['s2'] = await runScorer('s2', () => runS2(sourceDir));
       results['s3'] = await runScorer('s3', () => runS3(sourceDir));
@@ -143,6 +148,7 @@ export async function scoreSubmission(
     scorerVersions: {
       f1: F1_VERSION,
       f2: F2_VERSION,
+      f4: F4_VERSION,
       f5: F5_VERSION,
       ...(hasSource && { f6: F6_VERSION }),
       ...(hasSource && { c1: C1_VERSION }),
@@ -154,6 +160,7 @@ export async function scoreSubmission(
       c4: C4_VERSION,
       ...(hasSource && { c5: C5_VERSION }),
       ...(hasSource && { c6: C6_VERSION }),
+      ...(hasSource && { c7: C7_VERSION }),
       ...(hasSource && { s1: S1_VERSION }),
       ...(hasSource && { s2: S2_VERSION }),
       ...(hasSource && { s3: S3_VERSION }),

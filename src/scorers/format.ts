@@ -62,6 +62,31 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
         return `${mean.toFixed(1)}/5 (${pct}%) via ${model}${suffix}`;
       }
 
+      case 'f4': {
+        const note = d['note'] as string | null;
+        const error = d['error'] as string | null;
+        if (note) return note.slice(0, 80);
+        if (error) return `error: ${error.slice(0, 80)}`;
+        const mean = typeof d['meanRaw'] === 'number' ? d['meanRaw'] : null;
+        if (mean === null) return 'N/A';
+        const pct = ((mean - 1) / 4 * 100).toFixed(0);
+        const missing = (d['missingFeatures'] as string[] | undefined) ?? [];
+        const suffix = missing.length > 0 ? ` — missing: ${missing.slice(0, 3).join(', ')}` : '';
+        return `${mean.toFixed(1)}/5 (${pct}%)${suffix}`;
+      }
+
+      case 'c7': {
+        const note = d['note'] as string | null;
+        const error = d['error'] as string | null;
+        if (note) return note.slice(0, 80);
+        if (error) return `error: ${error.slice(0, 80)}`;
+        const mean = typeof d['meanRaw'] === 'number' ? d['meanRaw'] : null;
+        if (mean === null) return 'N/A';
+        const pct = ((mean - 1) / 4 * 100).toFixed(0);
+        const fileCount = Number(d['sampledFileCount'] ?? 0);
+        return `${mean.toFixed(1)}/5 (${pct}%) · ${fileCount} files sampled`;
+      }
+
       case 'v4': {
         const passing = Number(d['passingChecks'] ?? 0);
         const total = Number(d['totalChecks'] ?? 0);

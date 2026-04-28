@@ -24,7 +24,7 @@ Research target weights (dimension level):
 
 ### Conditional execution
 
-F1 is a gate: if the site does not render, all browser-dependent scorers (F2, F5, C3, C4, C9, V1, V2, V4) are skipped and scored as null. Source-dependent scorers (F6, C1, C2, C5, C6, S1, S2, S3) require a source ZIP.
+F1 is a gate: if the site does not render, all browser-dependent scorers (F2, F4, F5, C3, C4, C9, V1, V2, V4) are skipped and scored as null. Source-dependent scorers (F6, C1, C2, C5, C6, C7, S1, S2, S3) require a source ZIP.
 
 ---
 
@@ -76,15 +76,23 @@ score = (mustPassed + 0.5 × shouldPassed) / (mustTotal + 0.5 × shouldTotal)
 
 ---
 
-### F4 — LLM-as-judge functional match (not yet implemented)
+### F4 — LLM-as-judge functional match
 
-**What it measures:** Vision + code judge scoring "does this satisfy the prompt intent?" on a 1–5 scale using a per-task checklist and three temporal screenshots.
+**File:** `src/scorers/functional/f4-judge.ts`
 
-**Research spec:** Weight 10% within the Functional dimension, paired with F2 so the judge cannot override the deterministic checklist.
+**What it measures:** LLM judge scoring whether the page satisfies the functional intent of the prompt — the right features, the right content, the right purpose. Distinct from V1, which scores visual quality only.
 
-**Status:** Not implemented. V1 (visual judge) partially covers this but is scoped to visual quality, not functional intent.
+**How:** Three screenshots (initial, viewport-mobile, mid-scroll) plus the original prompt and the list of acceptance-criterion IDs are sent to a vision model via OpenRouter. The model scores 4 criteria on a 1–5 scale: `intent_match`, `feature_completeness`, `content_relevance`, `flow_coherence`. It also returns a `missing_features` array listing prompt-named features absent from the screenshots. Score = (mean raw – 1) / 4 normalized to 0–1.
 
-**Recommended change (v0.2):** Add an F4 scorer that sends screenshots + source excerpt to the judge with functional-intent criteria from the prompt YAML, distinct from V1's visual-quality criteria.
+**Calibration:** 1 = wrong page entirely; 3 = satisfies basic intent with some gaps (normal for AI-generated); 5 = fully satisfies all stated requirements.
+
+**Within-dimension weight (research):** 10% of Functional. Paired with F2 so the judge cannot override deterministic checks.
+
+**Why this complements F2:** F2 confirms specific elements exist via locators. F4 catches the broader class of failure where each individual element is present but the page as a whole has drifted from the prompt's intent — generic placeholder copy, missing or stubbed features, sections that don't match the described product.
+
+**Gap vs research:** Per-prompt checklist not yet implemented (v0.1 uses a fixed 4-criteria rubric). Single judge only; cross-family dual-judge protocol deferred to v0.3 along with V1's.
+
+**Recommended change (v0.3):** Promote to dual cross-family judges, sharing the V1 second-judge rollout.
 
 ---
 
@@ -206,17 +214,21 @@ score = (mustPassed + 0.5 × shouldPassed) / (mustTotal + 0.5 × shouldTotal)
 
 ---
 
-### C7 — Maintainability judge (not yet implemented)
+### C7 — Maintainability judge
 
-**What it measures:** LLM-assessed maintainability — naming, separation of concerns, component reuse, prop typing, secret handling — on a 1–5 scale.
+**File:** `src/scorers/code-quality/c7-maintainability.ts`
 
-**Research spec:** Claude Sonnet + GPT-4-class judge on a 5-point rubric, two-judge cross-family protocol (one Anthropic, one OpenAI) to mitigate self-preference. Weight: 15% of Code Quality.
+**What it measures:** LLM-assessed maintainability across 5 criteria on a 1–5 scale: `naming`, `separation_of_concerns`, `component_reuse`, `prop_typing`, `secret_handling`.
 
-**Research anchor:** 5 = component <150 LOC, single responsibility, typed props; 3 = 150–400 LOC, mixed concerns; 1 = >400 LOC or untyped.
+**How:** Samples up to 12 source files (`.ts`/`.tsx`/`.js`/`.jsx`/`.mjs`/`.cjs`) from the source ZIP, prioritizing entry points (`index.tsx`, `main.tsx`, `app.tsx`), then files in `components/`, `hooks/`, `features/`, `pages/`, then everything else. Within each tier, smaller files come first to fit more variety into the budget. Files >50KB are excluded. The selected excerpt is capped at 12,000 characters (~3k tokens) and sent to a chat model via OpenRouter with a maintainability rubric. Score = (mean raw – 1) / 4 normalized to 0–1.
 
-**Status:** Not yet implemented. The scorer slot is reserved; v0.1 shipped npm audit as a placeholder under this ID, which has since been moved to S3 where it belongs.
+**Calibration anchor:** 5 = component <150 LOC, single responsibility, fully typed props, no secrets in source; 3 = 150–400 LOC, mixed concerns acceptable (normal for AI-generated code); 1 = >400 LOC components, untyped, mixed concerns, hardcoded secrets.
 
-**Recommended change (v0.2):** Implement C7 as a cross-family maintainability judge using the same two-judge protocol as V1.
+**Within-dimension weight (research):** 15% of Code Quality.
+
+**Gap vs research:** Single judge only; cross-family dual-judge protocol deferred to v0.3 along with V1's. Sampling is heuristic (path-tier sort by file size) rather than diversity-weighted; could miss representative files in unusual project structures.
+
+**Recommended change (v0.3):** Promote to dual cross-family judges, sharing the V1 second-judge rollout. Consider AST-based file scoring (component count, prop interfaces detected) to drive sampling instead of path heuristics.
 
 ---
 
@@ -455,10 +467,8 @@ Security is a top-level dimension, promoted from inside code quality because AI 
 | Change | Impact |
 |---|---|
 | Implement dimension-level weighting in `composite.ts` | Aligns composite with research design (F 40%, C 15%, V 20%, T 15%, S 10%) |
-| Implement C7 maintainability judge (cross-family two-judge protocol) | Fills the reserved C7 slot; mirrors V1's judge setup |
-| Add second vision judge to V1 (cross-family) | Eliminates self-preference bias when tool backing LLM matches judge |
 | Add per-prompt `visualChecklist` to prompt YAML; wire into V1 | Enables per-task visual criteria instead of fixed 8-item rubric |
-| Add F4 LLM-as-judge functional match scorer | Covers criteria that resist programmatic checks |
+| Add per-prompt functional checklist; wire into F4 | Replaces F4's fixed 4-criteria rubric with prompt-specific checklist |
 | Add `env_setup_clean` sub-check to C5 | Catches AI tools that commit broken `package.json` |
 | Add Semgrep OWASP ruleset + deployed header audit to S1 | Completes the full S1 research spec |
 
@@ -466,11 +476,13 @@ Security is a top-level dimension, promoted from inside code quality because AI 
 
 | Change | Impact |
 |---|---|
+| Add second judge from a different model family across V1, F4, and C7 | Eliminates self-preference bias; one rollout covers all three judge scorers |
+| Add disagreement flagging logic (>1 point divergence) for the dual-judge scorers | Surfaces low-confidence judgments for manual review |
 | Add dynamic per-prompt F1 timeout from `baselineBuildSeconds` in prompt YAML | Prevents false-positive timeouts on complex prompts |
 | Implement V3 reference-design fidelity (CLIP + Block-Match + Text + Position + Color) | Enables reference-image prompts (Tier 3 "make it look like Linear") |
 | Add typographic hierarchy, color count/harmony, and CSS signal checks to V2 | Closes gap between current 4-check heuristic and full research spec |
 | Implement harness-instrumented timing layer (replaces self-reported cost) | Enables automated leaderboard refreshes without manual timing input |
-| Krippendorff's α calibration pipeline for V1 | Validates judge reliability against human ratings |
+| Krippendorff's α calibration pipeline for V1, F4, and C7 | Validates judge reliability against human ratings |
 | Duplication detection (`jscpd`) in C6 | Completes AST complexity sub-checks |
 | `osv.dev` cross-check in S3 | Catches CVEs not yet in npm advisory feed |
 | Quarterly S2 pattern refresh process | Keeps auth anti-patterns current as Supabase/Firebase/Clerk evolve |
@@ -493,6 +505,7 @@ Security is a top-level dimension, promoted from inside code quality because AI 
 |---|---|---|---|
 | f1 | `functional/f1-render.ts` | 0.1.0 | Fixed 30s timeout; 8s network-idle cap |
 | f2 | `functional/f2-acceptance.ts` | 0.1.0 | mustHave / shouldHave weighting |
+| f4 | `functional/f4-judge.ts` | 0.1.0 | Single judge; 4-criteria rubric; missing-features list |
 | f5 | `functional/f5-errors.ts` | 0.1.0 | Linear decay at 10 errors |
 | f6 | `functional/f6-verbatim.ts` | 0.1.0 | exact_copy, hex_value, structural types |
 | c1 | `code-quality/c1-eslint.ts` | 0.1.0 | typescript-eslint recommended only |
@@ -501,7 +514,7 @@ Security is a top-level dimension, promoted from inside code quality because AI 
 | c4 | `code-quality/c4-lighthouse.ts` | 0.1.0 | 3-run median; mobile 360×640 |
 | c5 | `code-quality/c5-bundle-size.ts` | 0.1.0 | Raw source bytes; no gzip; no env_setup_clean |
 | c6 | `code-quality/c6-complexity.ts` | 0.1.0 | SonarJS cognitive-complexity threshold 15 |
-| c7 | — | — | Reserved; not yet implemented |
+| c7 | `code-quality/c7-maintainability.ts` | 0.1.0 | Single judge; 5-criteria rubric; samples up to 12 source files |
 | c9 | `code-quality/c9-seo.ts` | 0.1.0 | 10 configurable checks |
 | v1 | `visual/v1-judge.ts` | 0.1.0 | Single judge; fixed 8-criteria rubric |
 | v2 | `visual/v2-design.ts` | 0.1.0 | 4 checks: whitespace, contrast, font size, line length |

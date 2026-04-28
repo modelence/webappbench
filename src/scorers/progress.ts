@@ -2,7 +2,13 @@ import { formatScorerDetail } from './format.ts';
 import type { ProgressEvent } from './orchestrate.ts';
 import type { ScorerResult } from './types.ts';
 
-const ORDER = ['f1', 'f2', 'f5', 'f6', 'v1', 'v2', 'v4', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9', 'cost'];
+const ORDER = [
+  'f1', 'f2', 'f4', 'f5', 'f6',
+  'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c9',
+  'v1', 'v2', 'v4',
+  's1', 's2', 's3',
+  'cost',
+];
 
 interface Completed {
   name: string;
