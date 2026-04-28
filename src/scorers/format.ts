@@ -125,16 +125,27 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
         const secrets = d['secrets'] as Record<string, unknown> | undefined;
         const headers = d['headers'] as Record<string, unknown> | undefined;
         const parts: string[] = [];
-        if (secrets) {
+        if (secrets && !secrets['note']) {
           const count = Number(secrets['findingsCount'] ?? 0);
+          const scanners = secrets['scanners'] as Record<string, Record<string, unknown>> | undefined;
+          // Show which external scanners actually contributed (regex always runs).
+          const ranScanners = scanners
+            ? Object.entries(scanners)
+                .filter(([name, s]) => name !== 'regex' && s['available'])
+                .map(([name]) => name)
+            : [];
+          const scannerSuffix = ranScanners.length ? ` (+${ranScanners.join(',')})` : '';
           if (count === 0) {
-            parts.push('no secrets');
+            parts.push(`no secrets${scannerSuffix}`);
           } else {
-            const patterns = (secrets['patternsSeen'] as string[] | undefined) ?? [];
-            parts.push(`${count} secret${count === 1 ? '' : 's'}: ${patterns.join(', ')}`);
+            const rules = (secrets['rulesSeen'] as string[] | undefined) ?? [];
+            // Trim long rule ids for terminal output.
+            const compactRules = rules.slice(0, 3).map((r) => r.split('/').pop() ?? r);
+            const more = rules.length > 3 ? ` +${rules.length - 3} more` : '';
+            parts.push(`${count} secret${count === 1 ? '' : 's'}${scannerSuffix}: ${compactRules.join(', ')}${more}`);
           }
         }
-        if (headers) {
+        if (headers && !headers['note']) {
           const passed = Number(headers['passedCount'] ?? 0);
           const total = Number(headers['totalCount'] ?? 0);
           const outcomes = (headers['outcomes'] as Array<Record<string, unknown>>) ?? [];
@@ -200,9 +211,20 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
       }
 
       case 'c5': {
-        const bytes = Number(d['totalBytesUncompressed'] ?? 0);
-        const jsFiles = Number(d['jsFileCount'] ?? 0);
-        return `${(bytes / 1024).toFixed(0)}KB uncompressed · ${jsFiles} JS files`;
+        if (d['note']) return String(d['note']).slice(0, 60);
+        const source = String(d['scoringSource'] ?? '');
+        if (source === 'network') {
+          const bytes = Number(d['networkBytesTransferred'] ?? 0);
+          const js = Number(d['networkJsResponseCount'] ?? 0);
+          const css = Number(d['networkCssResponseCount'] ?? 0);
+          const compressed = d['compressedMeasurement'] === true;
+          const label = compressed ? 'gzipped' : 'transferred';
+          return `${(bytes / 1024).toFixed(0)}KB ${label} · ${js} JS, ${css} CSS`;
+        }
+        // source-fallback: uncompressed source-tree byte total
+        const bytes = Number(d['scoredBytes'] ?? 0);
+        const js = Number(d['sourceJsFileCount'] ?? 0);
+        return `${(bytes / 1024).toFixed(0)}KB source (no network) · ${js} JS files`;
       }
 
       case 'c8': {

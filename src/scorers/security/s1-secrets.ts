@@ -1,11 +1,16 @@
 import { extname, join } from 'node:path';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import type { ScorerContext, ScorerResult } from '../types.ts';
+import { runSemgrep, runTrufflehog, type ExternalFinding, type ScannerResult } from './external-scanners.ts';
 
-export const S1_VERSION = '0.2.0';
+export const S1_VERSION = '0.3.0';
 
 // S1 has two sub-checks per the research design:
 //  1. Hardcoded secrets in source (binary — any finding zeros this half).
+//     Findings are unioned across three scanners, each independently optional:
+//       a. Built-in regex (always available)
+//       b. Semgrep with p/secrets + p/owasp-top-ten rulesets (if installed)
+//       c. trufflehog filesystem mode for high-entropy detection (if installed)
 //  2. Deployed HTTP security headers (6 standard headers, per-header points).
 // Either sub-check is N/A when its input is missing (no source ZIP / no fetchable URL).
 // The final score is the mean of whichever sub-checks ran.
@@ -75,12 +80,15 @@ interface HeaderCheck {
   isPresent: (firstValue: string, allHeaders: Record<string, string>) => boolean;
 }
 
+// Unified shape for findings from all three scanners (regex/Semgrep/trufflehog).
+// `scanner` lets details JSON/UI break down which tool fired which finding.
 interface SecretFinding {
-  patternId: string;
+  ruleId: string;        // canonical scanner-prefixed id (e.g. "regex/openai_key")
   label: string;
   file: string;
   lineNumber: number;
-  snippet: string;  // redacted — shows only first 8 chars of matched value
+  snippet: string;       // redacted — first 8 chars of matched value
+  scanner: 'regex' | 'semgrep' | 'trufflehog';
 }
 
 interface HeaderOutcome {
@@ -122,10 +130,11 @@ export async function runS1(ctx: ScorerContext): Promise<ScorerResult> {
       secrets: secrets
         ? {
             findingsCount: secrets.findings.length,
-            uniquePatternCount: new Set(secrets.findings.map((f) => f.patternId)).size,
-            patternsSeen: [...new Set(secrets.findings.map((f) => f.patternId))],
+            uniqueRuleCount: new Set(secrets.findings.map((f) => f.ruleId)).size,
+            rulesSeen: [...new Set(secrets.findings.map((f) => f.ruleId))],
             findings: secrets.findings.slice(0, 20),
             filesScanned: secrets.filesScanned,
+            scanners: secrets.scanners,
             score: secrets.score,
           }
         : { note: 'No source ZIP — secrets scan skipped' },
@@ -148,9 +157,56 @@ interface SecretsResult {
   findings: SecretFinding[];
   filesScanned: number;
   score: number;
+  scanners: {
+    regex: { available: true; findingCount: number };
+    semgrep: ScannerStatus;
+    trufflehog: ScannerStatus;
+  };
+}
+
+interface ScannerStatus {
+  available: boolean;
+  findingCount: number;
+  error?: string;
 }
 
 async function scanSecrets(sourceDir: string): Promise<SecretsResult> {
+  // Run regex scan + the two external scanners in parallel. Each is
+  // independent and fails closed (returns no findings on error) so a missing
+  // tool or scanner crash never zeros the others' output.
+  const [regexResult, semgrepResult, trufflehogResult] = await Promise.all([
+    runRegexScan(sourceDir),
+    runSemgrep(sourceDir),
+    runTrufflehog(sourceDir),
+  ]);
+
+  // Union findings across scanners. We deliberately don't dedupe — Semgrep
+  // and the regex scan often report the same leak via different rule ids,
+  // and surfacing both confirms the finding rather than burying it.
+  const findings: SecretFinding[] = [
+    ...regexResult.findings,
+    ...externalToInternal(semgrepResult.findings),
+    ...externalToInternal(trufflehogResult.findings),
+  ];
+
+  return {
+    findings,
+    filesScanned: regexResult.filesScanned,
+    score: findings.length === 0 ? 1 : 0,
+    scanners: {
+      regex: { available: true, findingCount: regexResult.findings.length },
+      semgrep: scannerStatus(semgrepResult),
+      trufflehog: scannerStatus(trufflehogResult),
+    },
+  };
+}
+
+interface RegexScanResult {
+  findings: SecretFinding[];
+  filesScanned: number;
+}
+
+async function runRegexScan(sourceDir: string): Promise<RegexScanResult> {
   const files = await collectFiles(sourceDir);
   const findings: SecretFinding[] = [];
 
@@ -165,21 +221,37 @@ async function scanSecrets(sourceDir: string): Promise<SecretsResult> {
         if (match) {
           const full = match[0];
           findings.push({
-            patternId: id,
+            ruleId: `regex/${id}`,
             label,
             file: file.slice(sourceDir.length + 1),
             lineNumber: i + 1,
             snippet: `${full.slice(0, 8)}…`,
+            scanner: 'regex',
           });
         }
       }
     }
   }
 
+  return { findings, filesScanned: files.length };
+}
+
+function externalToInternal(findings: ExternalFinding[]): SecretFinding[] {
+  return findings.map((f) => ({
+    ruleId: f.ruleId,
+    label: f.label,
+    file: f.file,
+    lineNumber: f.lineNumber,
+    snippet: f.snippet,
+    scanner: f.scanner,
+  }));
+}
+
+function scannerStatus(result: ScannerResult): ScannerStatus {
   return {
-    findings,
-    filesScanned: files.length,
-    score: findings.length === 0 ? 1 : 0,
+    available: result.available,
+    findingCount: result.findings.length,
+    ...(result.error ? { error: result.error } : {}),
   };
 }
 

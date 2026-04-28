@@ -2,12 +2,77 @@
 
 Reproducible open-source benchmark for AI sitebuilder products — Lovable, Replit Agent, Same.new, v0, bolt.new, Claude Artifacts.
 
-**v0.1 philosophy:** you drive each sitebuilder's UI manually (one prompt, one tool), paste the resulting preview URL into the harness, and the harness runs the full deterministic scoring pipeline against that URL. No browser automation of the sitebuilders themselves — that gets accounts banned and ships to every user of the benchmark. Scoring uses Playwright, Lighthouse, axe-core, and a lightweight SEO checker.
+## What this repo does
+
+You drive each sitebuilder's UI manually (one prompt, one tool), paste the resulting preview URL into a config file, and the harness runs a deterministic scoring pipeline against that URL. Scoring covers four dimensions: **functional correctness**, **code quality**, **visual design**, and **security**. Cost / speed is captured separately as informational data.
+
+The output is a per-run JSON artifact and a static HTML leaderboard (`leaderboard.html`) ranking every (tool, prompt, run) submission across all metrics.
+
+**No browser automation of the sitebuilders.** Playwright-driven sign-ins get accounts banned (confirmed with Lovable), so submission is manual; scoring is fully automated.
+
+See [METRICS.md](METRICS.md) for the full per-scorer spec, weights, and rationale, and [ai-sitebuilder-benchmark-design.md](ai-sitebuilder-benchmark-design.md) for the research design behind the scoring choices.
+
+## Metrics tracked
+
+19 scorers across 5 dimensions. Composite score = weighted mean of dimension scores (Functional 47% / Code Quality 18% / Visual 24% / Security 11%; Cost 15% redistributed because it is informational only).
+
+### Functional correctness (47% of composite)
+
+| Scorer | Weight | Measures |
+|---|---|---|
+| **F1** render | 7.05% | HTTP 2xx + non-empty body within 30s. Gate: failures skip downstream scorers. |
+| **F2** acceptance | 21.15% | Per-prompt `must_have` / `should_have` checklist via Playwright role/label/text locators. |
+| **F4** intent judge | 4.7% | LLM judge (vision) over screenshots scoring intent match, feature completeness, content relevance, flow coherence. Per-prompt extras supported via `functional_checklist.extra`. |
+| **F5** errors | 2.35% | Console errors + 4xx/5xx network responses. 0 errors = 1.0; linear decay to 0 at 10+. |
+| **F6** verbatim | 11.75% | Exact strings, hex values, structural identifiers from the prompt (e.g. `"Get started"`, `#003366`). Source-only. |
+
+### Code quality (18% of composite)
+
+| Scorer | Weight | Measures |
+|---|---|---|
+| **C1** lint | 3.6% | ESLint with typescript-eslint recommended rules, normalized per 1k LOC. Source-only. |
+| **C2** types | 0.9% | `tsc --noEmit --strict` errors per 1k LOC. Filters missing-module errors. Source-only. |
+| **C3** a11y | 3.6% | axe-core WCAG 2.1/2.2 AA violations per 1k DOM nodes. |
+| **C4** performance | 3.6% | Lighthouse performance score (mobile-throttled, median of 3 runs). |
+| **C5** bundle | 0.9% | Gzipped JS+CSS payload over the wire (`Content-Length` from `page.on('response')`). Lighthouse-aligned thresholds: ≤170 KB = 1.0, ≥1 MB = 0. Falls back to uncompressed source bytes if no network capture. |
+| **C6** complexity | 0.9% | Cognitive complexity violations (eslint-plugin-sonarjs) per 1k LOC. Source-only. |
+| **C7** maintainability judge | 2.7% | LLM judge over a sampled source excerpt scoring naming, separation of concerns, component reuse, prop typing, secret handling. Source-only. |
+| **C8** install | 0.9% | `npm ci` (or pnpm/yarn equivalent) succeeds in a clean temp dir. Catches committed `package.json` files that don't actually install. Source-only. |
+| **C9** SEO | 0.9% | Per-prompt-applicable checks: title length, meta description, canonical, OG tags, JSON-LD, `html[lang]`, heading hierarchy. |
+
+### Visual design (24% of composite)
+
+| Scorer | Weight | Measures |
+|---|---|---|
+| **V1** visual judge | 13.2% | LLM judge over 3 screenshots scoring 8 visual defaults + 3 copy-quality defaults (no SaaS-speak, no fabricated trust signals, CTA verb specificity) + per-prompt `visual_checklist.extra`. |
+| **V2** design heuristics | 7.2% | 8 deterministic in-browser checks: 4 layout (whitespace, contrast, font size, line length) + 4 CSS conventions (`box-sizing: border-box`, `@media (prefers-reduced-motion)`, ≥5 CSS custom properties, `:focus-visible` rule). |
+| **V4** responsive | 3.6% | Layout sanity at 360×800, 768×1024, 1440×900. No horizontal overflow + mobile touch targets ≥44px. |
+
+### Security (11% of composite)
+
+| Scorer | Weight | Measures |
+|---|---|---|
+| **S1** secrets + headers | 4.4% | (a) Source secret scan unioned across regex (always on), Semgrep `p/secrets` + `p/owasp-top-ten` (if installed), trufflehog filesystem (if installed). (b) Deployed HTTP header audit: CSP, HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy. |
+| **S2** auth patterns | 3.85% | 13 deterministic anti-pattern checks for Supabase service-role keys in client code, RLS disabled, JWT decode without verify, Firebase test mode, Stripe/OpenAI keys in client bundle, hardcoded admin emails/passwords, password reset without token. Source-only. |
+| **S3** vulnerabilities | 2.75% | `npm audit` weighted by severity (critical×10 + high×3 + moderate + low×0.1). Source-only. |
+
+### Cost / speed (informational, excluded from composite)
+
+| Scorer | Measures |
+|---|---|
+| **Cost** | Self-reported TTFR (time to first render) / TTWB (time to working build) + credits / USD estimate. Not instrumented in v0.1. |
+
+When a scorer's input is missing (no source ZIP, unreachable URL, etc.) it returns null and its weight redistributes within the dimension. If a whole dimension is empty, its weight redistributes across the rest.
 
 ## Requirements
 
 - Node.js ≥ 20
 - Chromium (auto-installed by `@playwright/test`)
+- **Optional, recommended for full S1 coverage:**
+  - [Semgrep](https://semgrep.dev) — `pip install semgrep`
+  - [trufflehog](https://github.com/trufflesecurity/trufflehog) — `brew install trufflehog` or `go install github.com/trufflesecurity/trufflehog/v3@latest`
+- **Optional, required for V1/F4/C7 (judge scorers):**
+  - `OPENROUTER_API_KEY` environment variable. Get one at [openrouter.ai](https://openrouter.ai/keys). Without it, the three judge scorers return null and drop from the composite.
 
 ## Install
 
@@ -17,83 +82,119 @@ npx playwright install chromium
 npm run typecheck
 ```
 
-## Workflow
+Optionally add an `.env` file:
 
-**Config-driven (recommended).** Declare all the (tool, prompt, url) triples in one place, then run a single command.
+```bash
+OPENROUTER_API_KEY=sk-or-...
+# OPENROUTER_MODEL=google/gemini-2.5-pro   # default if unset
+```
+
+## Usage
+
+### Config-driven (recommended)
+
+Declare all (tool, prompt, url) triples in one place, then run a single command.
 
 1. Copy the example:
    ```bash
    cp submissions.example.yaml submissions.yaml
    ```
-2. For each tool × prompt you want to evaluate:
+2. For each tool × prompt:
    - Open the tool's UI (e.g. <https://lovable.dev>, <https://replit.com>).
    - Paste the prompt from `prompts/corpus/<prompt-id>.yaml`.
    - Copy the resulting preview URL into `submissions.yaml`.
-   - (Optional) record wall-clock timing and credits spent in the same entry.
+   - (Optional) export the source ZIP and reference it in `source:`.
+   - (Optional) record wall-clock timing and credits in the same entry.
 3. Score everything and generate the leaderboard:
    ```bash
    npm run bench -- score-all
    open leaderboard.html
    ```
 
-`score-all` is re-runnable — rerunning it overwrites previous scores for the URLs still in the config. Add new entries and re-run; remove entries to stop scoring them (old artifact dirs stay until you `rm -rf artifacts`).
+`score-all` is idempotent. Re-running overwrites scores for URLs still in the config. Add new entries and re-run; remove entries to stop scoring them (existing artifact dirs stay until you `rm -rf artifacts`).
 
-**Ad-hoc (without config).** For one-offs:
+### Ad-hoc
+
+For one-offs:
+
 ```bash
 npm run bench -- submit --tool lovable --prompt nimbus-notes-landing --url https://<preview>.lovable.app/
 npm run bench -- score artifacts/lovable/nimbus-notes-landing/0
 npm run bench -- report
 ```
 
-## CLI reference
+### CLI reference
 
 ```bash
-npm run bench -- tools         # List supported tools
-npm run bench -- prompts       # List corpus prompts (validates YAML)
-npm run bench -- submit --tool <t> --prompt <id> --url <url>  # single submission
-npm run bench -- score <submission-dir>                       # score a single submission
-npm run bench -- score-all [--config submissions.yaml]        # batch: submit + score everything + report
+npm run bench -- tools                                            # List supported tools
+npm run bench -- prompts                                          # List corpus prompts (validates YAML)
+npm run bench -- submit --tool <t> --prompt <id> --url <url>      # Create a single submission
+                       [--source path/to/source.zip]              #   (optional) attach source ZIP for source-only scorers
+npm run bench -- score <submission-dir>                           # Run all scorers on an existing submission
+npm run bench -- score-all [--config submissions.yaml]            # Batch: create + score every entry, then regenerate report
 npm run bench -- report [--artifacts artifacts] [--out leaderboard.html]
 ```
 
-## v0.1 scorers
+When `score-all` finishes, the console prints the composite score plus a per-dimension breakdown:
 
-| Dimension | Scorer | What it measures |
-|---|---|---|
-| Functional | **F1** render | HTTP 2xx + non-empty body paint within 30s |
-| Functional | **F2** acceptance | Per-prompt YAML checklist via Playwright `getByRole`/`getByLabel` |
-| Code quality | **C3** a11y | axe-core WCAG 2.1/2.2 AA violations per 1k DOM nodes |
-| Code quality | **C4** performance | Lighthouse mobile-throttled (perf, a11y, best-practices, SEO scores) |
-| Code quality | **C9** SEO hygiene | Title / meta / canonical / OG / JSON-LD / lang / heading hierarchy |
-| Cost / speed | **Cost** | Self-reported TTFR / TTWB + credits / USD (not instrumented) |
+```
+Score: 73.4 / 100  ▓  (16 scorers)
+    Functional    78.3 / 100   weight 47%   (f1 f2 f4 f5 f6)
+    Code Quality  62.1 / 100   weight 18%   (c1 c2 c3 c4 c5 c6 c7 c8 c9)
+    Visual        71.5 / 100   weight 24%   (v1 v2 v4)
+    Security      88.0 / 100   weight 11%   (s1 s2 s3)
+```
 
-**Deferred to later versions:** F6 (verbatim constraints — needs source), C1 (ESLint — needs source), V1 (dual-MLLM visual judge — v0.2), automated-mode adapters for API-accessible tools (v0.3).
+## Adding a prompt
+
+Each prompt is a YAML file under `prompts/corpus/`. Required fields:
+
+- `id` — kebab-case, must match the filename.
+- `tier` — 1 / 2 / 3 (difficulty).
+- `prompt` — the natural-language prompt sent to the sitebuilder.
+- `must_have` / `should_have` — Playwright assertions used by F2.
+- `verbatim_constraints` — exact strings / hex values / structural identifiers used by F6.
+- `seo_applicable` — list of SEO checks C9 should apply.
+
+Optional fields:
+
+- `visual_checklist.extra[]` — per-prompt criteria added to V1's default rubric.
+- `visual_checklist.placeholder_copy` — set `true` to skip V1's 3 copy-quality defaults when the prompt explicitly invites placeholder content.
+- `functional_checklist.extra[]` — per-prompt criteria added to F4's default rubric.
+
+See [`prompts/corpus/saas-pricing-page.yaml`](prompts/corpus/saas-pricing-page.yaml) for a worked example with both checklist extras.
 
 ## Layout
 
 ```
 src/
-  core/                # types, submission schema, artifact writers, version utils
-  prompts/             # Zod validator + YAML loader
+  core/                  # Types, submission schema, artifact writers
+  prompts/               # Zod validator + YAML loader
   scorers/
-    functional/        # f1-render.ts, f2-acceptance.ts
-    code-quality/      # c3-axe.ts, c4-lighthouse.ts, c9-seo.ts
-    cost.ts            # reads user-reported timing
-    orchestrate.ts     # runs all scorers against a submission
-  report/              # JSONL → static HTML leaderboard
-  cli.ts               # commander entrypoint
-prompts/corpus/        # YAML prompts — one per file
-artifacts/             # .gitignored — scored runs land here
+    functional/          # f1, f2, f4, f5, f6
+    code-quality/        # c1, c2, c3, c4, c5, c6, c7, c8, c9
+    visual/              # v1, v2, v4
+    security/            # s1, s2, s3, external-scanners (Semgrep + trufflehog wrappers)
+    cost.ts              # User-reported timing
+    composite.ts         # Weighted composite + per-dimension breakdown
+    orchestrate.ts       # Single submission → all scorers
+    score-all.ts         # Batch from submissions.yaml
+    progress.ts          # Live console progress
+    format.ts            # Per-scorer one-line summaries
+  report/generate.ts     # JSON artifacts → static HTML leaderboard
+  cli.ts                 # Commander entrypoint
+prompts/corpus/          # YAML prompts (one per file)
+artifacts/               # .gitignored — scored runs land here
+METRICS.md               # Full per-scorer documentation, weights, rationale
 ```
 
 ## Caveats
 
-- **Self-reported timing.** T1/T2 are user-entered wall-clock times. Instrumented timing returns in v0.3 via automated-mode adapters for tools with APIs (v0 Platform API, bolt.diy Docker, Anthropic Messages API).
-- **URL rot.** Preview URLs may expire. Scorers run at submit time and results are snapshotted; re-scoring later may diverge.
-- **We score what the tool *publishes*.** Some tools render differently in their in-editor preview than at the deployed URL. The deployed URL is what ships to users, so that's the score that matters.
-- **Do not automate sitebuilder UIs.** Playwright-driven sign-in gets accounts banned (confirmed with Lovable). This benchmark is explicit about that constraint.
-
-See `ai-sitebuilder-benchmark-design.md` for the full research and roadmap, and `~/.claude/plans/plan-how-to-implement-quiet-hare.md` for the implementation plan.
+- **Self-reported timing.** TTFR / TTWB / cost are user-entered. Instrumented timing returns in v0.3 via automated-mode adapters for tools with APIs (v0 Platform API, bolt.diy Docker, Anthropic Messages API).
+- **URL rot.** Preview URLs expire. Scores are snapshotted at submit time; re-scoring later may diverge.
+- **What the tool publishes is what gets scored.** Some tools render differently in their in-editor preview than at the deployed URL. The deployed URL is what ships to users, so that's the score that counts.
+- **Do not automate sitebuilder UIs.** Playwright-driven sign-in gets accounts banned. Submission is manual by design.
+- **Single-judge bias on V1/F4/C7.** All three judge scorers currently use one model from one provider, which inflates scores when the tool's backing LLM matches the judge's family. Cross-family dual-judge protocol is planned for v0.3.
 
 ## License
 

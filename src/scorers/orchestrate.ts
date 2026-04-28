@@ -14,7 +14,7 @@ import { runC1, C1_VERSION } from './code-quality/c1-eslint.ts';
 import { runC2, C2_VERSION } from './code-quality/c2-types.ts';
 import { runC3, C3_VERSION } from './code-quality/c3-axe.ts';
 import { runC4, C4_VERSION } from './code-quality/c4-lighthouse.ts';
-import { runC5, C5_VERSION } from './code-quality/c5-bundle-size.ts';
+import { runC5, C5_VERSION, attachNetworkCollector, type NetworkCollector } from './code-quality/c5-bundle-size.ts';
 import { runC6, C6_VERSION } from './code-quality/c6-complexity.ts';
 import { runC7, C7_VERSION } from './code-quality/c7-maintainability.ts';
 import { runC8, C8_VERSION } from './code-quality/c8-install.ts';
@@ -80,8 +80,12 @@ export async function scoreSubmission(
     return result;
   };
 
-  // Attach error collector before any navigation so we capture everything.
+  // Attach passive collectors before any navigation so we capture everything.
   const errorCollector = attachErrorCollector(page);
+  // Network collector survives only as long as F1 + page interactions; stopped
+  // alongside the error collector so post-load fetches in later scorers don't
+  // pollute the page-load payload number.
+  let networkCollector: NetworkCollector | null = attachNetworkCollector(page);
 
   try {
     results['f1'] = await runScorer('f1', () => runF1(ctx));
@@ -90,6 +94,7 @@ export async function scoreSubmission(
       // Score F5 here — all page events during F1+F2 have been collected.
       results['f5'] = await runScorer('f5', async () => {
         errorCollector.stop();
+        networkCollector?.stop();
         return scoreF5(errorCollector);
       });
       await page.screenshot({ path: join(paths.screenshots, 'post-interaction.png'), fullPage: true }).catch(() => undefined);
@@ -105,6 +110,7 @@ export async function scoreSubmission(
       results['c4'] = await runScorer('c4', () => runC4(ctx));
     } else {
       errorCollector.stop();
+      networkCollector?.stop();
       const skip: ScorerResult = {
         scorer: 'skipped',
         version: 'n/a',
@@ -128,11 +134,15 @@ export async function scoreSubmission(
     // without source, so S1 lives outside the hasSource gate.
     results['s1'] = await runScorer('s1', () => runS1(ctx));
 
+    // C5 measures the gzipped network payload (always primary) and falls back
+    // to uncompressed source totals when no network capture is available — so
+    // it runs regardless of source ZIP, identical to S1's split signal model.
+    results['c5'] = await runScorer('c5', () => runC5(ctx, { network: networkCollector }));
+
     if (hasSource) {
       results['f6'] = await runScorer('f6', () => runF6(sourceDir, ctx.prompt.verbatimConstraints));
       results['c1'] = await runScorer('c1', () => runC1(sourceDir));
       results['c2'] = await runScorer('c2', () => runC2(sourceDir));
-      results['c5'] = await runScorer('c5', () => runC5(sourceDir));
       results['c6'] = await runScorer('c6', () => runC6(sourceDir));
       results['c7'] = await runScorer('c7', () => runC7(ctx));
       results['c8'] = await runScorer('c8', () => runC8(sourceDir));
@@ -163,7 +173,7 @@ export async function scoreSubmission(
       v2: V2_VERSION,
       v4: V4_VERSION,
       c4: C4_VERSION,
-      ...(hasSource && { c5: C5_VERSION }),
+      c5: C5_VERSION,
       ...(hasSource && { c6: C6_VERSION }),
       ...(hasSource && { c7: C7_VERSION }),
       ...(hasSource && { c8: C8_VERSION }),

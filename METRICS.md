@@ -238,21 +238,25 @@ score = (mustPassed + 0.5 × shouldPassed) / (mustTotal + 0.5 × shouldTotal)
 
 ---
 
-### C5 — Bundle and dependency hygiene
+### C5 — Bundle payload (gzipped)
 
-**What it measures:** Uncompressed JS + CSS source size.
+**File:** `src/scorers/code-quality/c5-bundle-size.ts`
 
-**How:** Scans source ZIP for `.js`, `.ts`, `.tsx`, `.css`, and variants. Skips build artifacts and `node_modules`. Reports raw source bytes (no minification or tree-shaking). Score: 1 at ≤150KB, linear decay to 0 at ≥1MB. Passed if ≤512KB.
+**What it measures:** The gzipped JS + CSS payload transferred over the wire during page load — the metric that actually maps to time-to-interactive.
 
-**Within-dimension weight (research):** 10% of Code Quality.
+**How (v0.2.0):** A passive `page.on('response')` listener attached before navigation captures every `script` and `stylesheet` response during F1 + F2. For each response, transferred bytes come from the `Content-Length` header (gzipped when the server compressed the response, which is the realistic user case). When `Content-Length` is missing — usually chunked transfer-encoding — the listener falls back to reading the response body length. The scorer flags `compressedMeasurement: true` only when every response had a `Content-Length`, so users can tell whether the number is purely gzipped or mixed.
 
-**Research spec (three sub-checks, partially split across scorers):**
+**Score:** Lighthouse-aligned thresholds — 1.0 at ≤170 KB transferred, linear decay to 0 at ≥1 MB. Passed if ≤350 KB.
 
-1. **`env_setup_clean`** — `npm ci` succeeds from a fresh checkout with no workarounds (`--legacy-peer-deps`, patched `node_modules`). **Implemented as C8 (separate scorer)** since "did it install" is a fundamentally different signal than "is the bundle small."
-2. **Bundle size and shape** — gzipped JS payload + route-split count. Current implementation measures raw source, not gzipped output. **Gap: no gzip measurement, no route-split count.**
-3. **Vulnerability and license hygiene** — `npm audit` for known-vulnerable packages + license compatibility scan. Audit is in S3; license scan not implemented.
+**Source ZIP fallback:** When no network capture is available (page didn't render or wasn't fetched), C5 falls back to summing uncompressed source bytes from the ZIP using the prior v0.1 thresholds (1.0 at ≤150 KB, decay to 1 MB). The result clearly labels `scoringSource: 'source-fallback'`. If neither network nor source is available, score is null.
 
-**Recommended change:** Measure gzipped payload size from Playwright's `page.on('response')` or via `rollup-plugin-visualizer` output.
+**Side-stat:** When source ZIP is present, uncompressed source totals (JS bytes, CSS bytes, file counts) are included in `details.source*` for diagnostics — useful to compare against the gzipped network number.
+
+**Within-dimension weight:** 5% of Code Quality (the research has 10% for the full bundle-and-dependency-hygiene block; C5 carries the bundle half, with `env_setup_clean` split off into C8 and `npm audit` in S3).
+
+**Why it's better than the v0.1 source-byte heuristic:** raw source bytes penalize design-system inclusions (shadcn, Radix, Tailwind utility classes) heavily even when tree-shaking and minification eliminate most of them at build time. A site that imports shadcn and ships 60 KB gzipped is fundamentally different from a site that hand-rolls components and ships the same 60 KB; the v0.1 measurement couldn't distinguish them.
+
+**Gap vs research:** Route-split count not yet measured. License hygiene scan (originally bundled into the research's C5) remains unimplemented.
 
 ---
 
@@ -488,20 +492,17 @@ Security is a top-level dimension, promoted from inside code quality because AI 
 
 Either sub-check is N/A when its input is missing (no source ZIP for secrets, or unreachable URL for headers). Final score = mean of whichever sub-checks ran.
 
-**Sub-check 1 — secrets:** Scans all text files <1MB (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.html`, `.json`, `.env*`, `.yaml`, `.yml`, `.toml`, `.sh`), skipping `node_modules`, `.git`, `dist`, `build`, `.next`, `out`, `.cache`. Eight regex patterns:
+**Sub-check 1 — secrets (v0.3.0, three scanners unioned):** S1 runs three independent scanners in parallel and unions their findings. Each scanner is independently optional; if a tool isn't installed the others still run.
 
-| Pattern ID | Label |
-|---|---|
-| `openai_key` | OpenAI API key (`sk-…`) |
-| `anthropic_key` | Anthropic API key (`sk-ant-…`) |
-| `aws_access_key` | AWS access key ID (`AKIA…`) |
-| `github_pat` | GitHub personal token (`ghp_…`) |
-| `private_key_pem` | PEM private key header |
-| `long_jwt` | Hardcoded JWT token (≥150 chars after `eyJ`) |
-| `hardcoded_password` | Password/passwd/pwd assigned to a string literal |
-| `hardcoded_secret` | Secret/token/api_key assigned to a ≥20-char literal |
+**(a) Built-in regex (always available).** Scans all text files <1MB (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.html`, `.json`, `.env*`, `.yaml`, `.yml`, `.toml`, `.sh`), skipping `node_modules`, `.git`, `dist`, `build`, `.next`, `out`, `.cache`. Eight patterns covering OpenAI/Anthropic/AWS/GitHub/PEM/JWT and generic password/secret literals.
 
-Sub-score: 1 (no findings) or 0 (any finding).
+**(b) Semgrep (optional, install via `pip install semgrep`).** Runs `semgrep --config p/secrets --config p/owasp-top-ten --json` against the source tree with a 60s per-rule timeout and a 120s overall timeout. The `p/secrets` ruleset covers vendor-specific token formats the regex scan doesn't (Stripe, Mailgun, Slack, Postgres URIs, OAuth client secrets, Firebase config blobs, ~150 patterns total); `p/owasp-top-ten` broadens to general code-level OWASP issues (SQL injection sinks, hardcoded crypto keys, insecure randomness). Findings are tagged `scanner: 'semgrep'`.
+
+**(c) trufflehog (optional, install via `brew install trufflehog` or `go install github.com/trufflesecurity/trufflehog/v3@latest`).** Runs `trufflehog filesystem --json --no-update` for high-entropy detection — catches arbitrary base64/hex strings that look like credentials but don't match any known pattern. The `Verified` flag in the output indicates trufflehog was able to actively confirm the credential is live (e.g., by hitting the corresponding API). Findings are tagged `scanner: 'trufflehog'`.
+
+**Scoring:** all findings are unioned (no dedup — when Semgrep and the regex scan flag the same leak via different rule ids, both are surfaced as confirmation rather than buried). Sub-score = 1 if zero findings across all scanners, else 0. The result's `details.secrets.scanners` block reports per-scanner availability and finding counts so users can see what actually ran.
+
+**Tool detection:** `command -v semgrep` and `command -v trufflehog` are checked once per scan via a 5s shell test; if a tool isn't on PATH the wrapper returns `available: false` silently. Tool errors (timeout, bad JSON, unexpected exit code) are also non-fatal — captured in `scanners.<name>.error` for diagnostics, with the other scanners' findings still counted.
 
 **Sub-check 2 — deployed headers:** `fetch(submission.artifactUrl)` with a 10s timeout, lowercases all response header names, then checks 6 standard security headers. Each present + non-trivially-set header earns one point. Sub-score = `passed / 6`.
 
@@ -586,9 +587,8 @@ Sub-score: 1 (no findings) or 0 (any finding).
 
 | Change | Impact |
 |---|---|
-| Add Semgrep OWASP ruleset + `trufflehog` to S1 | Broadens secret coverage beyond the 8 hand-coded regex patterns |
-| Measure gzipped bundle size in C5 | Replaces raw-source measurement with a more meaningful payload metric |
 | Default empty-state critical criterion for app-track prompts | Catches the most common app-track regression: blank pane on zero records |
+| Route-split count + license-hygiene scan in C5 | Closes the remaining sub-checks from research C5 not covered by gzipped payload alone |
 
 ### v0.3 priority changes
 
@@ -630,7 +630,7 @@ Sub-score: 1 (no findings) or 0 (any finding).
 | c2 | `code-quality/c2-types.ts` | 0.1.0 | tsc strict; ignores missing-module errors |
 | c3 | `code-quality/c3-axe.ts` | 0.1.0 | wcag2a/aa, wcag21a/aa, wcag22aa tags |
 | c4 | `code-quality/c4-lighthouse.ts` | 0.1.0 | 3-run median; mobile 360×640 |
-| c5 | `code-quality/c5-bundle-size.ts` | 0.1.0 | Raw source bytes; no gzip; no env_setup_clean |
+| c5 | `code-quality/c5-bundle-size.ts` | 0.2.0 | Gzipped JS+CSS payload via `page.on('response')` Content-Length (primary); uncompressed source bytes when no network capture (fallback). Lighthouse-aligned thresholds. |
 | c6 | `code-quality/c6-complexity.ts` | 0.1.0 | SonarJS cognitive-complexity threshold 15 |
 | c7 | `code-quality/c7-maintainability.ts` | 0.1.0 | Single judge; 5-criteria rubric; samples up to 12 source files |
 | c8 | `code-quality/c8-install.ts` | 0.1.0 | Detects npm/pnpm/yarn from lockfile; runs strict `ci`/`--frozen-lockfile` in temp dir; 240s timeout |
@@ -638,7 +638,7 @@ Sub-score: 1 (no findings) or 0 (any finding).
 | v1 | `visual/v1-judge.ts` | 0.2.0 | Single judge; 8 visual + 3 copy-quality defaults + per-prompt `visual_checklist.extra`; copy-quality skipped when `placeholder_copy: true` |
 | v2 | `visual/v2-design.ts` | 0.2.0 | 8 checks: 4 layout (whitespace, contrast, font size, line length) + 4 CSS conventions (box-sizing, prefers-reduced-motion, custom properties, :focus-visible). CSS-rule checks skip when stylesheets are CORS-blocked. |
 | v4 | `visual/v4-responsive.ts` | 0.1.0 | 3 viewports; horizontal overflow + touch targets |
-| s1 | `security/s1-secrets.ts` | 0.2.0 | Two sub-checks: 8-pattern source secrets scan + 6-header deployed audit; mean of whichever ran |
+| s1 | `security/s1-secrets.ts` | 0.3.0 | Two sub-checks: source secrets (regex + Semgrep `p/secrets`+`p/owasp-top-ten` if installed + trufflehog filesystem if installed; findings unioned) + 6-header deployed audit; mean of whichever ran |
 | s2 | `security/s2-auth.ts` | 0.1.0 | 13 patterns; client-side awareness; weighted severity |
 | s3 | `security/s3-vuln.ts` | 0.1.2 | npm audit; critical=10, high=3, moderate=1, low=0.1 penalty |
 | cost | `cost.ts` | 0.1.0 | Self-reported; informational only |
