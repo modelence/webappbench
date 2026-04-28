@@ -90,7 +90,26 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
         return `${v} violation${v === 1 ? '' : 's'} (${per1k.toFixed(1)}/1k)${suffix}`;
       }
 
-      case 'c7': {
+      case 's1': {
+        const count = Number(d['findingsCount'] ?? 0);
+        if (count === 0) return 'no secrets found';
+        const patterns = (d['patternsSeen'] as string[] | undefined) ?? [];
+        return `${count} secret${count === 1 ? '' : 's'} found: ${patterns.join(', ')}`;
+      }
+
+      case 's2': {
+        if (d['note']) return String(d['note']).slice(0, 60);
+        const count = Number(d['findingsCount'] ?? 0);
+        if (count === 0) return 'no auth issues found';
+        const by = d['bySeverity'] as Record<string, number> | undefined;
+        const parts: string[] = [];
+        if (by?.['critical']) parts.push(`${by['critical']} critical`);
+        if (by?.['high']) parts.push(`${by['high']} high`);
+        if (by?.['medium']) parts.push(`${by['medium']} medium`);
+        return parts.join(', ');
+      }
+
+      case 's3': {
         if (d['note']) return String(d['note']).slice(0, 60);
         const critical = Number(d['critical'] ?? 0);
         const high = Number(d['high'] ?? 0);
@@ -104,13 +123,6 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
         if (moderate > 0) parts.push(`${moderate} moderate`);
         if (low > 0) parts.push(`${low} low`);
         return parts.join(', ');
-      }
-
-      case 'c8': {
-        const count = Number(d['findingsCount'] ?? 0);
-        if (count === 0) return 'no secrets found';
-        const patterns = (d['patternsSeen'] as string[] | undefined) ?? [];
-        return `${count} secret${count === 1 ? '' : 's'} found: ${patterns.join(', ')}`;
       }
 
       case 'c1': {

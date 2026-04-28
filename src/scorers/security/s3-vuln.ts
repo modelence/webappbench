@@ -4,7 +4,7 @@ import { basename, join, relative } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { ScorerResult } from '../types.ts';
 
-export const C7_VERSION = '0.1.2';
+export const S3_VERSION = '0.1.2';
 
 interface AuditVuln {
   name: string;
@@ -39,7 +39,7 @@ interface CommandResult {
   timedOut: boolean;
 }
 
-export async function runC7(sourceDir: string): Promise<ScorerResult> {
+export async function runS3(sourceDir: string): Promise<ScorerResult> {
   const start = Date.now();
   const auditDir = await findAuditDir(sourceDir);
 
@@ -49,8 +49,8 @@ export async function runC7(sourceDir: string): Promise<ScorerResult> {
     await access(pkgPath);
   } catch {
     return {
-      scorer: 'c7',
-      version: C7_VERSION,
+      scorer: 's3',
+      version: S3_VERSION,
       passed: null,
       score: null,
       details: { note: 'No package.json found - npm audit skipped', elapsedMs: Date.now() - start },
@@ -80,8 +80,8 @@ export async function runC7(sourceDir: string): Promise<ScorerResult> {
     const prepared = await prepareGeneratedLockfileAuditDir(auditDir);
     if (!prepared.ok) {
       return {
-        scorer: 'c7',
-        version: C7_VERSION,
+        scorer: 's3',
+        version: S3_VERSION,
         passed: null,
         score: null,
         details: {
@@ -105,8 +105,8 @@ export async function runC7(sourceDir: string): Promise<ScorerResult> {
 
   if (raw === null) {
     return {
-      scorer: 'c7',
-      version: C7_VERSION,
+      scorer: 's3',
+      version: S3_VERSION,
       passed: null,
       score: null,
       details: { note: 'npm audit failed or timed out', elapsedMs: Date.now() - start },
@@ -118,8 +118,8 @@ export async function runC7(sourceDir: string): Promise<ScorerResult> {
     auditData = JSON.parse(raw) as NpmAuditOutput;
   } catch {
     return {
-      scorer: 'c7',
-      version: C7_VERSION,
+      scorer: 's3',
+      version: S3_VERSION,
       passed: null,
       score: null,
       details: { note: 'Failed to parse npm audit output', elapsedMs: Date.now() - start },
@@ -130,8 +130,8 @@ export async function runC7(sourceDir: string): Promise<ScorerResult> {
   if (!vulnCounts) {
     const reason = auditData.message ? `: ${auditData.message.slice(0, 120)}` : '';
     return {
-      scorer: 'c7',
-      version: C7_VERSION,
+      scorer: 's3',
+      version: S3_VERSION,
       passed: null,
       score: null,
       details: { note: `npm audit returned no vulnerability metadata${reason}`, elapsedMs: Date.now() - start },
@@ -157,8 +157,8 @@ export async function runC7(sourceDir: string): Promise<ScorerResult> {
   }));
 
   return {
-    scorer: 'c7',
-    version: C7_VERSION,
+    scorer: 's3',
+    version: S3_VERSION,
     passed,
     score,
     details: {
@@ -181,7 +181,7 @@ async function prepareGeneratedLockfileAuditDir(auditDir: string): Promise<
   | { ok: true; auditDir: string; tempRoot: string }
   | { ok: false; error: string }
 > {
-  const tempRoot = await mkdtemp(join(tmpdir(), 'benchmark-c7-'));
+  const tempRoot = await mkdtemp(join(tmpdir(), 'benchmark-s3-'));
   const tempAuditDir = join(tempRoot, 'source');
 
   try {

@@ -15,8 +15,9 @@ import { runC3, C3_VERSION } from './code-quality/c3-axe.ts';
 import { runC4, C4_VERSION } from './code-quality/c4-lighthouse.ts';
 import { runC5, C5_VERSION } from './code-quality/c5-bundle-size.ts';
 import { runC6, C6_VERSION } from './code-quality/c6-complexity.ts';
-import { runC7, C7_VERSION } from './code-quality/c7-audit.ts';
-import { runC8, C8_VERSION } from './code-quality/c8-secrets.ts';
+import { runS1, S1_VERSION } from './security/s1-secrets.ts';
+import { runS2, S2_VERSION } from './security/s2-auth.ts';
+import { runS3, S3_VERSION } from './security/s3-vuln.ts';
 import { runC9, C9_VERSION } from './code-quality/c9-seo.ts';
 import { runV1, V1_VERSION } from './visual/v1-judge.ts';
 import { runV2, V2_VERSION } from './visual/v2-design.ts';
@@ -124,8 +125,9 @@ export async function scoreSubmission(
       results['c2'] = await runScorer('c2', () => runC2(sourceDir));
       results['c5'] = await runScorer('c5', () => runC5(sourceDir));
       results['c6'] = await runScorer('c6', () => runC6(sourceDir));
-      results['c7'] = await runScorer('c7', () => runC7(sourceDir));
-      results['c8'] = await runScorer('c8', () => runC8(sourceDir));
+      results['s1'] = await runScorer('s1', () => runS1(sourceDir));
+      results['s2'] = await runScorer('s2', () => runS2(sourceDir));
+      results['s3'] = await runScorer('s3', () => runS3(sourceDir));
     }
   } finally {
     await context.close();
@@ -152,8 +154,9 @@ export async function scoreSubmission(
       c4: C4_VERSION,
       ...(hasSource && { c5: C5_VERSION }),
       ...(hasSource && { c6: C6_VERSION }),
-      ...(hasSource && { c7: C7_VERSION }),
-      ...(hasSource && { c8: C8_VERSION }),
+      ...(hasSource && { s1: S1_VERSION }),
+      ...(hasSource && { s2: S2_VERSION }),
+      ...(hasSource && { s3: S3_VERSION }),
       c9: C9_VERSION,
       cost: COST_VERSION,
     },
