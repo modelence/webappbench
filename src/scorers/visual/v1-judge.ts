@@ -3,11 +3,13 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { getLlmClient, DEFAULT_JUDGE_MODEL } from '../../core/llm.ts';
 import { writeJson } from '../../core/artifact.ts';
+import type { ChecklistConfig, ChecklistItem } from '../../core/types.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
 
-export const V1_VERSION = '0.1.0';
+export const V1_VERSION = '0.2.0';
 
-const CRITERIA = [
+// Default visual-quality criteria, always included.
+const VISUAL_DEFAULTS = [
   { id: 'visual_hierarchy',  label: 'Visual hierarchy',   description: 'Clear focal points and visual flow guiding the eye through the page' },
   { id: 'typography',        label: 'Typography',          description: 'Readable font sizes, weights, line heights; clear heading scale' },
   { id: 'color_harmony',     label: 'Color harmony',       description: 'Cohesive palette with appropriate contrast; not garish or clashing' },
@@ -16,12 +18,18 @@ const CRITERIA = [
   { id: 'cta_prominence',    label: 'CTA prominence',       description: 'Primary call-to-action is visually distinct and easy to find' },
   { id: 'mobile_layout',     label: 'Mobile layout',       description: 'Content is well-composed at mobile viewport (360px); nothing obviously broken' },
   { id: 'overall_polish',    label: 'Overall polish',      description: 'Professional quality overall; looks like a real product, not a rough prototype' },
-] as const;
+];
 
-type CriterionId = (typeof CRITERIA)[number]['id'];
+// Copy-quality criteria, included by default but skipped when the prompt
+// explicitly uses placeholder content (placeholder_copy: true).
+const COPY_QUALITY_DEFAULTS = [
+  { id: 'copy_specificity',  label: 'Copy specificity',    description: 'Headlines and feature descriptions name concrete benefits or specific user roles, not generic SaaS-speak ("revolutionize", "unlock", "next-level", "seamless", "the future of X")' },
+  { id: 'no_fabricated_trust', label: 'No fabricated trust signals', description: 'No invented testimonials with stock-photo names, no fabricated customer logos, no invented metric badges ("10,000+ companies trust us") unless the prompt explicitly requests them' },
+  { id: 'cta_clarity',       label: 'CTA clarity',         description: 'Primary CTA uses a specific action verb matching the prompt\'s stated user action (e.g., "Start free trial" / "Get the report" rather than generic "Get started" / "Learn more")' },
+];
 
 interface CriterionScore {
-  id: CriterionId;
+  id: string;
   score: number;        // 1..5
   rationale: string;
 }
@@ -82,7 +90,8 @@ export async function runV1(ctx: ScorerContext): Promise<ScorerResult> {
 
   const model = process.env['OPENROUTER_MODEL'] ?? DEFAULT_JUDGE_MODEL;
 
-  const criteriaList = CRITERIA.map(
+  const criteria = buildCriteria(ctx.prompt.visualChecklist);
+  const criteriaList = criteria.map(
     (c) => `- ${c.id}: ${c.label} — ${c.description}`,
   ).join('\n');
 
@@ -149,6 +158,9 @@ Respond with JSON only.`;
         model,
         meanRaw: meanScore !== null ? Number(meanScore.toFixed(2)) : null,
         criteria: scored,
+        criteriaTotal: criteria.length,
+        criteriaExtras: ctx.prompt.visualChecklist.extra.length,
+        placeholderCopy: ctx.prompt.visualChecklist.placeholderCopy,
         overallNotes: judgeOutput.overall_notes ?? null,
         screenshotsUsed: screenshots.length,
         usage: usage ?? null,
@@ -168,6 +180,22 @@ Respond with JSON only.`;
       },
     };
   }
+}
+
+// Builds the per-prompt criteria list:
+//   1. The 8 default visual-quality criteria (always included).
+//   2. Three copy-quality criteria (skipped when prompt sets placeholder_copy: true).
+//   3. Any prompt-specific extras from prompt.visual_checklist.extra.
+// Duplicate ids are de-duplicated, keeping the last occurrence so prompt extras
+// can override default descriptions if they reuse a default id intentionally.
+function buildCriteria(config: ChecklistConfig): ChecklistItem[] {
+  const list: ChecklistItem[] = [...VISUAL_DEFAULTS];
+  if (!config.placeholderCopy) list.push(...COPY_QUALITY_DEFAULTS);
+  list.push(...config.extra);
+
+  const byId = new Map<string, ChecklistItem>();
+  for (const item of list) byId.set(item.id, item);
+  return [...byId.values()];
 }
 
 async function loadScreenshots(screenshotsDir: string): Promise<string[]> {

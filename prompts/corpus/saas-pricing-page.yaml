@@ -45,3 +45,33 @@ seo_applicable:
   - og_tags
   - lang
   - heading_hierarchy
+
+# Per-prompt visual judge criteria — added on top of V1's default rubric.
+visual_checklist:
+  extra:
+    - id: tier_visual_hierarchy
+      label: Tier visual hierarchy
+      description: >
+        The Pro/"Most popular" tier is visually distinguished from the other
+        two — different border, background, scale, or position — without
+        looking like a different page section.
+    - id: price_legibility
+      label: Price legibility
+      description: >
+        Each tier's price ($Free / $29 / $99) is the second-most prominent
+        element after the tier name and is readable without zooming.
+
+# Per-prompt F4 functional-intent criteria — added on top of F4's defaults.
+functional_checklist:
+  extra:
+    - id: pricing_tiers_complete
+      label: All three pricing tiers complete
+      description: >
+        Each tier shows name, price, a description, ≥3 feature bullets, and
+        a CTA button — none of the four elements may be stubbed or missing
+        on any tier.
+    - id: faq_substantive
+      label: FAQ has substantive answers
+      description: >
+        FAQ section has ≥3 question/answer pairs and the answers are written
+        for this product, not placeholder lorem-style filler.

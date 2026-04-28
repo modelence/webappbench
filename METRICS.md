@@ -134,7 +134,9 @@ score = (mustPassed + 0.5 × shouldPassed) / (mustTotal + 0.5 × shouldTotal)
 
 **What it measures:** LLM judge scoring whether the page satisfies the functional intent of the prompt — the right features, the right content, the right purpose. Distinct from V1, which scores visual quality only.
 
-**How:** Three screenshots (initial, viewport-mobile, mid-scroll) plus the original prompt and the list of acceptance-criterion IDs are sent to a vision model via OpenRouter. The model scores 4 criteria on a 1–5 scale: `intent_match`, `feature_completeness`, `content_relevance`, `flow_coherence`. It also returns a `missing_features` array listing prompt-named features absent from the screenshots. Score = (mean raw – 1) / 4 normalized to 0–1.
+**How:** Three screenshots (initial, viewport-mobile, mid-scroll) plus the original prompt and the list of acceptance-criterion IDs are sent to a vision model via OpenRouter. The model scores the criteria on a 1–5 scale; defaults are 4 criteria (`intent_match`, `feature_completeness`, `content_relevance`, `flow_coherence`), plus any prompt-specific extras from the prompt YAML's `functional_checklist.extra` block. It also returns a `missing_features` array listing prompt-named features absent from the screenshots. Score = (mean raw – 1) / 4 normalized to 0–1.
+
+**Per-prompt extras (v0.2.0):** prompt YAML may add additional criteria under `functional_checklist.extra`, each with `id` (snake_case), `label`, and `description`. Extras run alongside the defaults — duplicate ids replace the default with that id (so prompts can override a default's description if needed). See `prompts/corpus/saas-pricing-page.yaml` for an example.
 
 **Calibration:** 1 = wrong page entirely; 3 = satisfies basic intent with some gaps (normal for AI-generated); 5 = fully satisfies all stated requirements.
 
@@ -142,7 +144,7 @@ score = (mustPassed + 0.5 × shouldPassed) / (mustTotal + 0.5 × shouldTotal)
 
 **Why this complements F2:** F2 confirms specific elements exist via locators. F4 catches the broader class of failure where each individual element is present but the page as a whole has drifted from the prompt's intent — generic placeholder copy, missing or stubbed features, sections that don't match the described product.
 
-**Gap vs research:** Per-prompt checklist not yet implemented (v0.1 uses a fixed 4-criteria rubric). Single judge only; cross-family dual-judge protocol deferred to v0.3 along with V1's.
+**Gap vs research:** Single judge only; cross-family dual-judge protocol deferred to v0.3 along with V1's.
 
 **Recommended change (v0.3):** Promote to dual cross-family judges, sharing the V1 second-judge rollout.
 
@@ -332,23 +334,43 @@ Score = passed / total applicable checks.
 
 ### V1 — LLM visual judge
 
-**What it measures:** LLM-assessed visual quality across 8 criteria on a 1–5 scale.
+**What it measures:** LLM-assessed visual quality across a per-prompt criteria list on a 1–5 scale.
 
-**How:** Three screenshots (initial, viewport-mobile, mid-scroll) are base64-encoded and sent to a vision model via OpenRouter. The model scores: visual hierarchy, typography, color harmony, whitespace, brand fit, CTA prominence, mobile layout, overall polish. Score = (mean raw – 1) / 4 normalized to 0–1.
+**How:** Three screenshots (initial, viewport-mobile, mid-scroll) are base64-encoded and sent to a vision model via OpenRouter. The criteria list is built per-call from three sources:
+
+1. **Visual-quality defaults (8, always included):** visual hierarchy, typography, color harmony, whitespace, brand fit, CTA prominence, mobile layout, overall polish.
+2. **Copy-quality defaults (3, included unless `placeholder_copy: true`):**
+   - `copy_specificity` — headlines name concrete benefits, not generic SaaS-speak ("revolutionize", "unlock", "seamless")
+   - `no_fabricated_trust` — no invented testimonials, fake customer logos, or fabricated metric badges unless the prompt asks for them
+   - `cta_clarity` — primary CTA uses a specific action verb matching the prompt's stated user action
+3. **Per-prompt extras** from `visual_checklist.extra` in the prompt YAML.
+
+Duplicate ids are de-duplicated, last-wins, so a prompt extra with the same id as a default replaces the default's description. Score = (mean raw – 1) / 4 normalized to 0–1.
+
+**Per-prompt YAML schema (v0.2.0):**
+
+```yaml
+visual_checklist:
+  extra:
+    - id: tier_visual_hierarchy
+      label: Tier visual hierarchy
+      description: The Pro tier is visually distinguished from the other two...
+  placeholder_copy: false  # set true to skip the 3 copy-quality defaults
+```
+
+See `prompts/corpus/saas-pricing-page.yaml` for a worked example.
 
 **Calibration:** 3 = average AI-generated output, 5 = genuinely impressive.
 
-**Within-dimension weight (research):** 45% of Visual dimension.
+**Within-dimension weight (research):** 45% of Visual dimension (implemented as 55% in this harness — V3 and V5 weights redistributed since they aren't implemented).
 
-**Research spec (several gaps vs v0.1):**
+**Research spec (remaining gaps vs current v0.2.0):**
 
-1. **Dual-judge cross-family protocol** — research requires two independent vision judges from different model families (e.g., Gemini 2.5 Pro + Claude Opus) to mitigate self-preference bias. Lovable uses Claude Sonnet as its backing LLM — if Claude is also the sole judge, self-preference inflates scores by ~5–10pp. **v0.1 uses a single configurable judge.**
-2. **Per-task checklist** — research defines 10–14 checklist items per prompt (not a fixed generic rubric). Includes copy-quality items: (a) copy specificity (no "revolutionize", "unlock", "seamless" SaaS-speak); (b) no fabricated trust signals (invented testimonials, fake customer logos, fabricated metric badges); (c) CTA clarity (specific action verb matching prompt's stated user action). **v0.1 uses a fixed 8-criteria rubric, not per-task.**
-3. **Disagreement handling** — when two judges disagree >1 point on any criterion, flag for manual review or a third judge. **Not applicable in v0.1 (single judge).**
-4. **Structured JSON output** — required to avoid verbosity bias. **Implemented in v0.1.**
-5. **Krippendorff's α calibration** — target α ≥ 0.67 (tentative reliability) against a 50-example human-rated calibration set. **Not implemented.**
+1. **Dual-judge cross-family protocol** — research requires two independent vision judges from different model families (e.g., Gemini 2.5 Pro + Claude Opus) to mitigate self-preference bias. Lovable uses Claude Sonnet as its backing LLM — if Claude is also the sole judge, self-preference inflates scores by ~5–10pp. **v0.2 uses a single configurable judge.**
+2. **Disagreement handling** — when two judges disagree >1 point on any criterion, flag for manual review or a third judge. **Not applicable until dual-judge ships.**
+3. **Krippendorff's α calibration** — target α ≥ 0.67 (tentative reliability) against a 50-example human-rated calibration set. **Not implemented.**
 
-**Recommended change (v0.2):** Add second judge from a different model family. Add per-prompt `visualChecklist` field to prompt YAML. Add disagreement flagging logic.
+**Recommended change (v0.3):** Add second judge from a different model family. Add disagreement flagging logic. Build the calibration corpus.
 
 ---
 
@@ -556,8 +578,6 @@ Sub-score: 1 (no findings) or 0 (any finding).
 
 | Change | Impact |
 |---|---|
-| Add per-prompt `visualChecklist` to prompt YAML; wire into V1 | Enables per-task visual criteria instead of fixed 8-item rubric |
-| Add per-prompt functional checklist; wire into F4 | Replaces F4's fixed 4-criteria rubric with prompt-specific checklist |
 | Add Semgrep OWASP ruleset + `trufflehog` to S1 | Broadens secret coverage beyond the 8 hand-coded regex patterns |
 | Measure gzipped bundle size in C5 | Replaces raw-source measurement with a more meaningful payload metric |
 | Default empty-state critical criterion for app-track prompts | Catches the most common app-track regression: blank pane on zero records |
@@ -595,7 +615,7 @@ Sub-score: 1 (no findings) or 0 (any finding).
 |---|---|---|---|
 | f1 | `functional/f1-render.ts` | 0.1.0 | Fixed 30s timeout; 8s network-idle cap |
 | f2 | `functional/f2-acceptance.ts` | 0.1.0 | mustHave / shouldHave weighting |
-| f4 | `functional/f4-judge.ts` | 0.1.0 | Single judge; 4-criteria rubric; missing-features list |
+| f4 | `functional/f4-judge.ts` | 0.2.0 | Single judge; 4 default criteria + per-prompt `functional_checklist.extra`; missing-features list |
 | f5 | `functional/f5-errors.ts` | 0.1.0 | Linear decay at 10 errors |
 | f6 | `functional/f6-verbatim.ts` | 0.1.0 | exact_copy, hex_value, structural types |
 | c1 | `code-quality/c1-eslint.ts` | 0.1.0 | typescript-eslint recommended only |
@@ -607,7 +627,7 @@ Sub-score: 1 (no findings) or 0 (any finding).
 | c7 | `code-quality/c7-maintainability.ts` | 0.1.0 | Single judge; 5-criteria rubric; samples up to 12 source files |
 | c8 | `code-quality/c8-install.ts` | 0.1.0 | Detects npm/pnpm/yarn from lockfile; runs strict `ci`/`--frozen-lockfile` in temp dir; 240s timeout |
 | c9 | `code-quality/c9-seo.ts` | 0.1.0 | 10 configurable checks |
-| v1 | `visual/v1-judge.ts` | 0.1.0 | Single judge; fixed 8-criteria rubric |
+| v1 | `visual/v1-judge.ts` | 0.2.0 | Single judge; 8 visual + 3 copy-quality defaults + per-prompt `visual_checklist.extra`; copy-quality skipped when `placeholder_copy: true` |
 | v2 | `visual/v2-design.ts` | 0.1.0 | 4 checks: whitespace, contrast, font size, line length |
 | v4 | `visual/v4-responsive.ts` | 0.1.0 | 3 viewports; horizontal overflow + touch targets |
 | s1 | `security/s1-secrets.ts` | 0.2.0 | Two sub-checks: 8-pattern source secrets scan + 6-header deployed audit; mean of whichever ran |

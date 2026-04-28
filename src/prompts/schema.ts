@@ -30,6 +30,17 @@ const seoCheckSchema = z.enum([
   'sitemap_xml',
 ]);
 
+const checklistItemSchema = z.object({
+  id: z.string().regex(/^[a-z0-9_]+$/, 'checklist item id must be snake_case'),
+  label: z.string().min(1),
+  description: z.string().min(1),
+});
+
+const checklistConfigSchema = z.object({
+  extra: z.array(checklistItemSchema).default([]),
+  placeholder_copy: z.boolean().default(false),
+}).default({ extra: [], placeholder_copy: false });
+
 export const promptSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/, 'id must be kebab-case'),
   tier: z.union([z.literal(1), z.literal(2), z.literal(3)]),
@@ -38,6 +49,8 @@ export const promptSchema = z.object({
   should_have: z.array(acceptanceCriterionSchema).default([]),
   verbatim_constraints: z.array(verbatimConstraintSchema).default([]),
   seo_applicable: z.array(seoCheckSchema).default([]),
+  visual_checklist: checklistConfigSchema,
+  functional_checklist: checklistConfigSchema,
 });
 
 export type PromptYaml = z.infer<typeof promptSchema>;
@@ -51,6 +64,14 @@ export function normalizePrompt(raw: PromptYaml): Prompt {
     shouldHave: raw.should_have,
     verbatimConstraints: raw.verbatim_constraints,
     seoApplicable: raw.seo_applicable,
+    visualChecklist: {
+      extra: raw.visual_checklist.extra,
+      placeholderCopy: raw.visual_checklist.placeholder_copy,
+    },
+    functionalChecklist: {
+      extra: raw.functional_checklist.extra,
+      placeholderCopy: raw.functional_checklist.placeholder_copy,
+    },
   };
 }
 

@@ -25,6 +25,23 @@ export interface Prompt {
   shouldHave: AcceptanceCriterion[];
   verbatimConstraints: VerbatimConstraint[];
   seoApplicable: SeoCheck[];
+  visualChecklist: ChecklistConfig;
+  functionalChecklist: ChecklistConfig;
+}
+
+export interface ChecklistConfig {
+  // Extra criteria added on top of the scorer's default rubric.
+  extra: ChecklistItem[];
+  // Skip the default copy-quality criteria (no SaaS-speak, no fabricated
+  // trust signals, CTA verb specificity) when the prompt explicitly uses
+  // placeholder content. Only applies to the visual checklist.
+  placeholderCopy: boolean;
+}
+
+export interface ChecklistItem {
+  id: string;
+  label: string;
+  description: string;
 }
 
 export interface AcceptanceCriterion {

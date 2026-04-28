@@ -3,24 +3,23 @@ import { join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { getLlmClient, DEFAULT_JUDGE_MODEL } from '../../core/llm.ts';
 import { writeJson } from '../../core/artifact.ts';
+import type { ChecklistConfig, ChecklistItem } from '../../core/types.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
 
-export const F4_VERSION = '0.1.0';
+export const F4_VERSION = '0.2.0';
 
 // Functional-intent criteria. Distinct from V1 (visual quality) — these ask whether
 // the page actually does what the prompt asked for, beyond what F2's deterministic
 // checks can verify.
-const CRITERIA = [
-  { id: 'intent_match',       label: 'Intent match',        description: 'Does the page satisfy the user-facing purpose described in the prompt?' },
+const FUNCTIONAL_DEFAULTS: ChecklistItem[] = [
+  { id: 'intent_match',         label: 'Intent match',         description: 'Does the page satisfy the user-facing purpose described in the prompt?' },
   { id: 'feature_completeness', label: 'Feature completeness', description: 'Are all named features/sections present and recognizable, not just stubbed?' },
-  { id: 'content_relevance',  label: 'Content relevance',    description: 'Is the actual copy on-topic for the described product, not generic placeholder?' },
-  { id: 'flow_coherence',     label: 'Flow coherence',       description: 'Does the page tell a coherent story matching the prompt (hero → features → CTA, etc.)?' },
-] as const;
-
-type CriterionId = (typeof CRITERIA)[number]['id'];
+  { id: 'content_relevance',    label: 'Content relevance',    description: 'Is the actual copy on-topic for the described product, not generic placeholder?' },
+  { id: 'flow_coherence',       label: 'Flow coherence',       description: 'Does the page tell a coherent story matching the prompt (hero → features → CTA, etc.)?' },
+];
 
 interface CriterionScore {
-  id: CriterionId;
+  id: string;
   score: number;        // 1..5
   rationale: string;
 }
@@ -84,7 +83,8 @@ export async function runF4(ctx: ScorerContext): Promise<ScorerResult> {
 
   const model = process.env['OPENROUTER_MODEL'] ?? DEFAULT_JUDGE_MODEL;
 
-  const criteriaList = CRITERIA.map(
+  const criteria = buildCriteria(ctx.prompt.functionalChecklist);
+  const criteriaList = criteria.map(
     (c) => `- ${c.id}: ${c.label} — ${c.description}`,
   ).join('\n');
 
@@ -161,6 +161,8 @@ Respond with JSON only.`;
         model,
         meanRaw: meanScore !== null ? Number(meanScore.toFixed(2)) : null,
         criteria: scored,
+        criteriaTotal: criteria.length,
+        criteriaExtras: ctx.prompt.functionalChecklist.extra.length,
         missingFeatures: judgeOutput.missing_features ?? [],
         overallNotes: judgeOutput.overall_notes ?? null,
         screenshotsUsed: screenshots.length,
@@ -181,6 +183,17 @@ Respond with JSON only.`;
       },
     };
   }
+}
+
+// Builds the per-prompt criteria list: F4 defaults plus any prompt-specific
+// extras from prompt.functional_checklist.extra. The placeholder_copy flag
+// from ChecklistConfig is visual-only and ignored here.
+function buildCriteria(config: ChecklistConfig): ChecklistItem[] {
+  const list: ChecklistItem[] = [...FUNCTIONAL_DEFAULTS, ...config.extra];
+
+  const byId = new Map<string, ChecklistItem>();
+  for (const item of list) byId.set(item.id, item);
+  return [...byId.values()];
 }
 
 async function loadScreenshots(screenshotsDir: string): Promise<string[]> {
