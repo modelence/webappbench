@@ -91,13 +91,20 @@ type Dim = (typeof ALL_DIMS)[number];
 interface ToolAgg {
   runs: number;
   composite: number | null;
+  // Per-scorer averages (used for the existing per-scorer columns).
   dims: Record<Dim, number | null>;
+  // Per-dimension averages (used for the new 4-column dimension breakdown).
+  // Keyed by Dimension; each value is the mean of that dimension's weighted
+  // score across this tool's runs. Null when no run produced a value for
+  // that dimension (e.g., Security on a Lovable preview without source ZIP
+  // and unfetchable headers).
+  dimensionScores: Record<Dimension, { sum: number; count: number }>;
 }
 
 function summarizeByTool(runs: RunSummary[]): Map<string, ToolAgg> {
   const map = new Map<string, ToolAgg>();
   for (const r of runs) {
-    const agg = map.get(r.tool) ?? { runs: 0, composite: null, dims: Object.fromEntries(ALL_DIMS.map((d) => [d, null])) as Record<Dim, number | null> };
+    const agg = map.get(r.tool) ?? makeEmptyAgg();
     agg.runs += 1;
     for (const d of ALL_DIMS) {
       const s = r.scores[d]?.score;
@@ -106,7 +113,17 @@ function summarizeByTool(runs: RunSummary[]): Map<string, ToolAgg> {
       }
     }
     const c = computeComposite(r.scores);
-    if (c) agg.composite = agg.composite === null ? c.score : agg.composite + c.score;
+    if (c) {
+      agg.composite = agg.composite === null ? c.score : agg.composite + c.score;
+      // Accumulate per-dimension scores from this run's composite breakdown.
+      // Only dimensions with at least one contributing scorer appear in
+      // c.dimensions, so missing dimensions correctly stay at count: 0.
+      for (const dim of c.dimensions) {
+        const slot = agg.dimensionScores[dim.dimension];
+        slot.sum += dim.score;
+        slot.count += 1;
+      }
+    }
     map.set(r.tool, agg);
   }
   for (const agg of map.values()) {
@@ -116,6 +133,27 @@ function summarizeByTool(runs: RunSummary[]): Map<string, ToolAgg> {
     if (agg.composite !== null) agg.composite /= agg.runs;
   }
   return map;
+}
+
+function makeEmptyAgg(): ToolAgg {
+  return {
+    runs: 0,
+    composite: null,
+    dims: Object.fromEntries(ALL_DIMS.map((d) => [d, null])) as Record<Dim, number | null>,
+    dimensionScores: {
+      functional: { sum: 0, count: 0 },
+      code_quality: { sum: 0, count: 0 },
+      visual: { sum: 0, count: 0 },
+      security: { sum: 0, count: 0 },
+    },
+  };
+}
+
+// Mean per-dimension score across a tool's runs, or null when no run scored
+// the dimension (e.g., Security on a tool that never produced fetchable URLs).
+function aggDimensionMean(agg: ToolAgg, dim: Dimension): number | null {
+  const slot = agg.dimensionScores[dim];
+  return slot.count === 0 ? null : slot.sum / slot.count;
 }
 
 const METRIC_META: Record<string, { label: string; group: string; desc: string }> = {
@@ -192,6 +230,19 @@ function renderHtml(runs: RunSummary[]): string {
   };
 
   const dimHeaders = visibleDims.map(thWithTooltip).join('');
+
+  // Four dimension columns shown between the composite and the per-scorer
+  // columns. Order matches DIMENSION_ORDER (Functional → Code → Visual →
+  // Security) so the leaderboard reads left-to-right by composite weight.
+  const DIMENSION_COLUMN_ORDER: Dimension[] = ['functional', 'code_quality', 'visual', 'security'];
+
+  const dimensionColumnHeaders = DIMENSION_COLUMN_ORDER.map((dim) => {
+    const label = DIMENSION_LABELS[dim];
+    const color = GROUP_COLORS[label] ?? '#6b7280';
+    const weight = dimensionWeight(dim);
+    const tip = escape(`${label}: ${weight}% of composite. Weighted mean of contributing scorers in this dimension.`);
+    return `<th class="dim-col-th" data-tip="${tip}"><span class="dim-col-label" style="background:${color}22;color:${color}">${escape(label)}</span><span class="dim-col-weight">${weight}%</span></th>`;
+  }).join('');
   const summary = summarizeByTool(runs);
   const rankedSummaryEntries = [...summary.entries()]
     .sort((a, b) =>
@@ -212,10 +263,17 @@ function renderHtml(runs: RunSummary[]): string {
     const scoreCell = pct
       ? `<td class="score-cell"><div class="score-wrap ${scoreCls}">${bar}<span class="score-num">${pct}</span></div></td>`
       : `<td class="na">—</td>`;
+    // Per-dimension cells, looked up directly from the composite breakdown.
+    const dimByName = new Map<Dimension, number>();
+    if (c) for (const d of c.dimensions) dimByName.set(d.dimension, d.score);
+    const dimensionCells = DIMENSION_COLUMN_ORDER
+      .map((dim) => renderDimensionCell(dimByName.get(dim) ?? null, dim))
+      .join('');
     const dimCells = visibleDims.map((d) => renderScoreCell(r.scores[d]?.score)).join('');
     const toolSlug = escape(r.tool);
     return `<tr>
       ${scoreCell}
+      ${dimensionCells}
       <td class="tool-cell"><span class="tool-pill">${toolSlug}</span></td>
       <td class="prompt-cell">${escape(r.promptId)}</td>
       <td class="link-cell"><a href="${escape(r.artifactUrl)}" target="_blank" rel="noopener" title="Open live site">↗</a></td>
@@ -234,18 +292,23 @@ function renderHtml(runs: RunSummary[]): string {
       const scoreCell = pct
         ? `<td class="score-cell"><div class="score-wrap ${cls}">${bar}<span class="score-num">${pct}</span></div></td>`
         : `<td class="na">—</td>`;
+      const dimensionCells = DIMENSION_COLUMN_ORDER
+        .map((dim) => renderDimensionCell(aggDimensionMean(agg, dim), dim))
+        .join('');
       const dimCells = visibleDims.map((d) => renderScoreCell(agg.dims[d])).join('');
       return `<tr>
         <td class="rank-cell">${medal}</td>
         ${scoreCell}
+        ${dimensionCells}
         <td class="tool-cell"><span class="tool-pill">${escape(tool)}</span></td>
         <td class="runs-cell">${agg.runs} run${agg.runs === 1 ? '' : 's'}</td>
         ${dimCells}
       </tr>`;
     }).join('\n');
 
-  const leaderColCount = 4 + visibleDims.length;
-  const perRunColCount  = 5 + visibleDims.length;
+  // Column counts include the 4 new dimension cells (between composite and per-scorer).
+  const leaderColCount = 4 + DIMENSION_COLUMN_ORDER.length + visibleDims.length;
+  const perRunColCount  = 5 + DIMENSION_COLUMN_ORDER.length + visibleDims.length;
   const generatedAt = new Date().toISOString();
 
   return `<!DOCTYPE html>
@@ -424,6 +487,59 @@ function renderHtml(runs: RunSummary[]): string {
   .dim-avg span { display: inline-block; min-width: 22px; }
   .mini-bar { display: inline-block; width: 28px; height: 3px; border-radius: 99px; margin-right: 4px; vertical-align: middle; }
 
+  /* ── Dimension columns (between composite and per-scorer) ── */
+  .dim-col-th {
+    cursor: help; position: relative;
+    border-left: 1px solid var(--border);
+  }
+  .dim-col-th:first-of-type { border-left: 1px solid var(--border); }
+  .dim-col-th:hover::after {
+    content: attr(data-tip);
+    position: absolute; top: calc(100% + 6px); left: 0; z-index: 100;
+    background: var(--tooltip-bg); border: 1px solid var(--border);
+    color: var(--text-dim); font-size: .78rem; font-weight: 400;
+    text-transform: none; letter-spacing: 0;
+    padding: .6rem .85rem; border-radius: var(--radius-sm);
+    width: 280px; white-space: normal; line-height: 1.4;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  }
+  .dim-col-label {
+    display: inline-block;
+    border-radius: 99px; padding: .1rem .55rem;
+    font-size: .7rem; font-weight: 700;
+  }
+  .dim-col-weight {
+    display: inline-block; margin-left: .35rem;
+    font-size: .65rem; font-weight: 700;
+    color: var(--text-muted); font-variant-numeric: tabular-nums;
+  }
+  .dim-cell {
+    min-width: 80px;
+    border-left: 1px solid var(--border);
+    --dim-color: #6b7280;
+  }
+  .dim-cell.na { color: var(--text-muted); }
+  .dim-cell-wrap {
+    display: flex; align-items: center; gap: .45rem;
+    padding: .25rem .55rem; border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--dim-color) 12%, transparent);
+  }
+  .dim-cell-num {
+    font-size: .85rem; font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    color: var(--dim-color);
+    min-width: 24px;
+  }
+  .dim-cell-bar {
+    flex: 1; height: 4px; max-width: 50px;
+    background: color-mix(in srgb, var(--dim-color) 20%, transparent);
+    border-radius: 99px; overflow: hidden;
+  }
+  .dim-cell-bar-fill {
+    height: 100%; background: var(--dim-color);
+    border-radius: 99px;
+  }
+
   /* ── Per-run cells ── */
   td.na { color: var(--text-muted) !important; background: var(--surface) !important; }
   .rank-cell { text-align: center; width: 48px; }
@@ -544,7 +660,9 @@ function renderHtml(runs: RunSummary[]): string {
     <table>
       <thead><tr>
         <th style="width:48px"></th>
-        <th>Score</th><th>Tool</th><th>Runs</th>
+        <th>Score</th>
+        ${dimensionColumnHeaders}
+        <th>Tool</th><th>Runs</th>
         ${dimHeaders}
       </tr></thead>
       <tbody>${summaryRows || `<tr><td colspan="${leaderColCount}" class="empty">No scored runs yet.</td></tr>`}</tbody>
@@ -557,7 +675,9 @@ function renderHtml(runs: RunSummary[]): string {
   <div class="table-wrap">
     <table>
       <thead><tr>
-        <th>Score</th><th>Tool</th><th>Prompt</th><th>URL</th><th>Version</th>
+        <th>Score</th>
+        ${dimensionColumnHeaders}
+        <th>Tool</th><th>Prompt</th><th>URL</th><th>Version</th>
         ${dimHeaders}
       </tr></thead>
       <tbody>${perRunRows || `<tr><td colspan="${perRunColCount}" class="empty">No scored runs yet.</td></tr>`}</tbody>
@@ -650,6 +770,19 @@ function renderMiniBar(score: number): string {
 function renderScoreCell(score: number | null | undefined): string {
   if (score == null) return `<td class="na">—</td>`;
   return `<td class="dim-avg">${renderMiniBar(score)}<span>${(score * 100).toFixed(0)}</span></td>`;
+}
+
+// Renders a per-dimension summary cell: tinted background (matching the
+// dimension's group color), score 0–100, and a small bar. Distinct styling
+// from renderScoreCell so the four dimension columns visually separate
+// themselves from the per-scorer columns to their right.
+function renderDimensionCell(score: number | null, dim: Dimension): string {
+  const label = DIMENSION_LABELS[dim];
+  const color = GROUP_COLORS[label] ?? '#6b7280';
+  if (score == null) return `<td class="dim-cell na">—</td>`;
+  const pct = (score * 100).toFixed(0);
+  const barWidth = Math.max(2, Math.round(score * 100 * 0.36));
+  return `<td class="dim-cell" style="--dim-color:${color}"><div class="dim-cell-wrap"><span class="dim-cell-num">${pct}</span><div class="dim-cell-bar"><div class="dim-cell-bar-fill" style="width:${barWidth}px"></div></div></div></td>`;
 }
 
 function escape(s: string): string {
