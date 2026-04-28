@@ -8,19 +8,71 @@ This document describes every scorer in the benchmark harness, the rationale beh
 
 ### Composite score
 
-The composite is currently an **unweighted average** of all contributing scorers. This is a deliberate v0.1 simplification. The research design calls for a dimension-weighted composite once enough data exists to validate weights.
+The composite is a **weighted mean of dimension scores**. Each dimension is itself a weighted mean of its scorers. When a scorer's score is null (skipped, N/A, or missing source), its weight redistributes proportionally across the other scorers in its dimension. When a whole dimension has no contributing scorers, that dimension drops out and its weight redistributes across the remaining dimensions.
 
-Research target weights (dimension level):
+#### Dimension weights
 
-| Dimension | Research weight | Current actual |
+| Dimension | Research weight | Implemented weight |
 |---|---|---|
-| Functional correctness | 40% | ~equal share |
-| Code / output quality | 15% | ~equal share |
-| Visual design quality | 20% | ~equal share |
+| Functional correctness | 40% | 47% |
+| Code / output quality | 15% | 18% |
+| Visual design quality | 20% | 24% |
+| Security | 10% | 11% |
 | Cost / speed | 15% | excluded (informational) |
-| Security | 10% | ~equal share |
 
-**Recommended change (v0.2):** implement dimension-level weighting in `composite.ts`.
+The research's 15% Cost weight is redistributed proportionally across the four scoring dimensions because Cost is self-reported and informational only — it does not contribute to the composite. The implemented weights normalize to 100%.
+
+#### Within-dimension scorer weights
+
+**Functional (47% of composite)** — sum to 100% within the dimension:
+
+| Scorer | Weight | Composite contribution |
+|---|---|---|
+| F1 render | 15% | 7.05% |
+| F2 acceptance | 45% | 21.15% |
+| F4 intent judge | 10% | 4.7% |
+| F5 errors | 5% | 2.35% |
+| F6 verbatim | 25% | 11.75% |
+
+Research has F3 (spec-based e2e tests) at 25% within Functional. F3 isn't implemented (app-track only), so its weight redistributes to F2 (+15%) and F6 (+10%) — the deterministic siblings.
+
+**Code Quality (18% of composite)** — sum to 100% within the dimension:
+
+| Scorer | Weight | Composite contribution |
+|---|---|---|
+| C1 lint | 20% | 3.6% |
+| C2 types | 5% | 0.9% |
+| C3 a11y | 20% | 3.6% |
+| C4 perf | 20% | 3.6% |
+| C5 bundle | 5% | 0.9% |
+| C6 complexity | 5% | 0.9% |
+| C7 maintainability | 15% | 2.7% |
+| C8 install | 5% | 0.9% |
+| C9 SEO | 5% | 0.9% |
+
+C5's research weight of 10% is split into C5 (5%) + C8 (5%) since the `env_setup_clean` sub-check ships as a top-level scorer.
+
+**Visual (24% of composite)** — sum to 100% within the dimension:
+
+| Scorer | Weight | Composite contribution |
+|---|---|---|
+| V1 visual judge | 55% | 13.2% |
+| V2 design heuristics | 30% | 7.2% |
+| V4 responsive | 15% | 3.6% |
+
+Research has V3 (reference fidelity) at 10% and V5 (animation polish) at 5%. Neither is implemented; their combined 15% redistributes proportionally across V1/V2/V4.
+
+**Security (11% of composite)** — sum to 100% within the dimension:
+
+| Scorer | Weight | Composite contribution |
+|---|---|---|
+| S1 secrets + headers | 40% | 4.4% |
+| S2 auth patterns | 35% | 3.85% |
+| S3 vuln audit | 25% | 2.75% |
+
+#### Renormalization on null scorers
+
+When a scorer returns `score: null` (skipped, N/A, missing source), its weight is removed from the dimension and the remaining scorers' weights are renormalized to sum to 100% within the dimension. Example: a submission without a source ZIP loses F6, C1, C2, C5, C6, C7, C8, S2, S3 — Functional then becomes a weighted mean of just F1/F2/F4/F5 with weights renormalized from {15, 45, 10, 5} to {21.4%, 64.3%, 14.3%, 7.1%}. If a whole dimension has no contributors (e.g., Security with no source ZIP and unfetchable URL), the dimension drops and its 11% redistributes across the remaining three.
 
 ### Conditional execution
 
@@ -504,11 +556,11 @@ Sub-score: 1 (no findings) or 0 (any finding).
 
 | Change | Impact |
 |---|---|
-| Implement dimension-level weighting in `composite.ts` | Aligns composite with research design (F 40%, C 15%, V 20%, T 15%, S 10%) |
 | Add per-prompt `visualChecklist` to prompt YAML; wire into V1 | Enables per-task visual criteria instead of fixed 8-item rubric |
 | Add per-prompt functional checklist; wire into F4 | Replaces F4's fixed 4-criteria rubric with prompt-specific checklist |
 | Add Semgrep OWASP ruleset + `trufflehog` to S1 | Broadens secret coverage beyond the 8 hand-coded regex patterns |
 | Measure gzipped bundle size in C5 | Replaces raw-source measurement with a more meaningful payload metric |
+| Default empty-state critical criterion for app-track prompts | Catches the most common app-track regression: blank pane on zero records |
 
 ### v0.3 priority changes
 

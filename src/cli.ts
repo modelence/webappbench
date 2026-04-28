@@ -6,7 +6,7 @@ import { createSubmissionArtifact } from './core/submission.ts';
 import { ALL_TOOLS } from './core/types.ts';
 import type { ToolName, UserReportedCost, UserReportedTiming } from './core/types.ts';
 import { loadCorpus } from './prompts/schema.ts';
-import { computeComposite, formatComposite } from './scorers/composite.ts';
+import { computeComposite, formatComposite, formatCompositeBreakdown } from './scorers/composite.ts';
 import { makeProgressHandler } from './scorers/progress.ts';
 import { scoreSubmission } from './scorers/orchestrate.ts';
 import { scoreAll } from './scorers/score-all.ts';
@@ -131,7 +131,10 @@ program
     const { onProgress, flush } = makeProgressHandler();
     const { results } = await scoreSubmission(dir, { onProgress });
     flush();
-    console.log(`  ${formatComposite(computeComposite(results))}`);
+    const composite = computeComposite(results);
+    console.log(`  ${formatComposite(composite)}`);
+    const breakdown = formatCompositeBreakdown(composite);
+    if (breakdown) console.log(breakdown);
   });
 
 

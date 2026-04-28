@@ -1,7 +1,7 @@
 import { loadConfig, type SubmissionConfigEntry } from '../core/config.ts';
 import { createSubmissionArtifact } from '../core/submission.ts';
 import type { UserReportedCost, UserReportedTiming } from '../core/types.ts';
-import { computeComposite, formatComposite } from './composite.ts';
+import { computeComposite, formatComposite, formatCompositeBreakdown } from './composite.ts';
 import { scoreSubmission } from './orchestrate.ts';
 import { makeProgressHandler } from './progress.ts';
 import type { ScorerResult } from './types.ts';
@@ -60,7 +60,10 @@ async function runOne(
     const { onProgress, flush } = makeProgressHandler();
     const { results } = await scoreSubmission(paths.root, { onProgress });
     flush();
-    console.log(`  ${formatComposite(computeComposite(results))}`);
+    const composite = computeComposite(results);
+    console.log(`  ${formatComposite(composite)}`);
+    const breakdown = formatCompositeBreakdown(composite);
+    if (breakdown) console.log(breakdown);
     return {
       tool: entry.tool,
       promptId: entry.prompt,

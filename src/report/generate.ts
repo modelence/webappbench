@@ -1,7 +1,7 @@
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Submission } from '../core/submission.ts';
-import { computeComposite } from '../scorers/composite.ts';
+import { computeComposite, scorerWeight, dimensionWeight, ALL_DIMENSION_WEIGHTS, type Dimension } from '../scorers/composite.ts';
 import type { ScorerResult } from '../scorers/types.ts';
 
 interface RunSummary {
@@ -142,6 +142,30 @@ const METRIC_META: Record<string, { label: string; group: string; desc: string }
   cost: { label: 'Cost',         group: 'Cost',          desc: 'Informational only — not included in composite score. Self-reported by user at submission: TTFR (time to first render), TTWB (time to working build), USD estimate.' },
 };
 
+// Composite contribution = (within-dim weight / 100) × (dim weight / 100), as percent.
+// Returns null for the cost scorer (not in composite) and any scorer without a weight entry.
+function compositeContribution(scorerId: string): number | null {
+  const sw = scorerWeight(scorerId);
+  if (!sw) return null;
+  const dw = dimensionWeight(sw.dimension);
+  return (sw.weight * dw) / 100;
+}
+
+function formatWeight(scorerId: string): string {
+  const pct = compositeContribution(scorerId);
+  if (pct === null) return '';
+  // Round to nearest tenth; trim trailing .0 for cleaner labels.
+  const rounded = Math.round(pct * 10) / 10;
+  return `${rounded % 1 === 0 ? rounded.toFixed(0) : rounded.toFixed(1)}%`;
+}
+
+const DIMENSION_LABELS: Record<Dimension, string> = {
+  functional: 'Functional',
+  code_quality: 'Code Quality',
+  visual: 'Visual',
+  security: 'Security',
+};
+
 const GROUP_COLORS: Record<string, string> = {
   Functional:   '#3b82f6',
   'Code Quality': '#8b5cf6',
@@ -160,7 +184,11 @@ function renderHtml(runs: RunSummary[]): string {
     const m = METRIC_META[dim];
     if (!m) return `<th>${dim}</th>`;
     const color = GROUP_COLORS[m.group] ?? '#6b7280';
-    return `<th class="metric-th" data-tip="${escape(m.desc)}"><span class="metric-badge" style="background:${color}22;color:${color}">${escape(m.label)}</span></th>`;
+    const weight = formatWeight(dim);
+    const tooltipPrefix = weight ? `Weight: ${weight} of composite. ` : 'Not in composite. ';
+    const tip = escape(tooltipPrefix + m.desc);
+    const weightSuffix = weight ? `<span class="metric-weight">${weight}</span>` : '';
+    return `<th class="metric-th" data-tip="${tip}"><span class="metric-badge" style="background:${color}22;color:${color}">${escape(m.label)}</span>${weightSuffix}</th>`;
   };
 
   const dimHeaders = visibleDims.map(thWithTooltip).join('');
@@ -438,11 +466,45 @@ function renderHtml(runs: RunSummary[]): string {
     padding: .1rem .4rem; border-radius: 99px; margin-left: auto;
   }
   .glossary-desc { font-size: .8rem; color: var(--text-muted); line-height: 1.5; }
+  .glossary-weight {
+    margin-left: auto;
+    font-size: .72rem; font-weight: 700; font-variant-numeric: tabular-nums;
+    padding: .1rem .45rem; border-radius: 99px;
+    border: 1px solid; background: transparent;
+  }
+  .glossary-weight-na { color: var(--text-muted); border-color: var(--border); }
   .group-Functional   { background: rgba(59,130,246,.15); color: #93c5fd; }
   .group-CodeQuality  { background: rgba(139,92,246,.15); color: #c4b5fd; }
   .group-Visual       { background: rgba(236,72,153,.15); color: #f9a8d4; }
   .group-Security     { background: rgba(249,115,22,.15); color: #fdba74; }
   .group-Cost         { background: rgba(107,114,128,.15); color: #d1d5db; }
+
+  /* ── Weight badge in column headers ── */
+  .metric-weight {
+    display: inline-block;
+    margin-left: .35rem;
+    font-size: .65rem; font-weight: 700;
+    color: var(--text-muted); font-variant-numeric: tabular-nums;
+  }
+
+  /* ── Dimension weights summary ── */
+  .weights-intro {
+    color: var(--text-dim); font-size: .85rem; line-height: 1.5;
+    margin-bottom: 1rem; max-width: 900px;
+  }
+  .dim-weights {
+    display: grid; gap: .75rem;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    margin-bottom: 1rem;
+  }
+  .dim-weight-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-left: 4px solid; border-radius: var(--radius);
+    padding: .75rem 1rem;
+    display: flex; align-items: baseline; justify-content: space-between;
+  }
+  .dim-weight-label { font-size: .82rem; font-weight: 600; color: var(--text); }
+  .dim-weight-pct { font-size: 1.15rem; font-weight: 700; font-variant-numeric: tabular-nums; }
 
   /* ── Footer ── */
   .site-footer { border-top: 1px solid var(--border); padding: 1.5rem 2rem; text-align: center; color: var(--text-muted); font-size: .78rem; }
@@ -464,7 +526,7 @@ function renderHtml(runs: RunSummary[]): string {
         <span><span class="badge">v0.1</span></span>
         <span>Generated ${escape(generatedAt)}</span>
         <span>${escape(String(runs.length))} scored run${runs.length === 1 ? '' : 's'}</span>
-        <span>Score = mean of non-null quality scorers · higher is better · /100</span>
+        <span>Score = weighted mean of dimension scores · higher is better · /100</span>
       </div>
     </div>
     <button class="theme-toggle" id="themeToggle" onclick="toggleTheme()" title="Toggle light/dark theme">
@@ -504,15 +566,37 @@ function renderHtml(runs: RunSummary[]): string {
 </section>
 
 <section>
+  <div class="section-title">Scoring weights</div>
+  <div class="weights-intro">
+    The composite is a weighted mean of dimension scores; each dimension is a weighted mean of its scorers. When a scorer is N/A its weight redistributes within its dimension; when a whole dimension is empty its weight redistributes across the rest.
+  </div>
+  <div class="dim-weights">
+    ${ALL_DIMENSION_WEIGHTS.map(({ dimension, weight }) => {
+      const label = DIMENSION_LABELS[dimension];
+      const color = GROUP_COLORS[label] ?? '#6b7280';
+      return `<div class="dim-weight-card" style="border-left-color:${color}">
+        <div class="dim-weight-label">${escape(label)}</div>
+        <div class="dim-weight-pct" style="color:${color}">${weight}%</div>
+      </div>`;
+    }).join('\n    ')}
+  </div>
+</section>
+
+<section>
   <div class="section-title">Metric glossary</div>
   <div class="glossary-grid">
     ${Object.entries(METRIC_META).map(([id, m]) => {
       const groupClass = 'group-' + m.group.replace(/\s+/g, '');
       const color = GROUP_COLORS[m.group] ?? '#6b7280';
+      const weight = formatWeight(id);
+      const weightBadge = weight
+        ? `<span class="glossary-weight" style="color:${color};border-color:${color}55">${weight}</span>`
+        : `<span class="glossary-weight glossary-weight-na">N/A</span>`;
       return `<div class="glossary-card">
         <div class="glossary-card-header">
           <span class="metric-badge" style="background:${color}22;color:${color}">${escape(m.label)}</span>
           <span class="glossary-group ${groupClass}">${escape(m.group)}</span>
+          ${weightBadge}
         </div>
         <div class="glossary-desc">${escape(m.desc)}</div>
       </div>`;
