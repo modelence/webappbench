@@ -201,13 +201,18 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
       }
 
       case 'c4': {
+        if (d['note']) return String(d['note']).slice(0, 80);
         const p = fmt(d['perfScore']);
         const a = fmt(d['a11yScore']);
         const b = fmt(d['bestPracticesScore']);
         const s = fmt(d['seoScore']);
         const m = d['metrics'] as Record<string, number | null> | undefined;
         const lcp = m?.['lcpMs'] != null ? ` LCP=${(m['lcpMs']! / 1000).toFixed(1)}s` : '';
-        return `perf=${p} a11y=${a} bp=${b} seo=${s}${lcp}`;
+        const successful = Number(d['successfulRuns'] ?? 0);
+        const total = Number(d['runs'] ?? 0);
+        // Only show run-count when not all runs succeeded — otherwise it's noise.
+        const runSuffix = successful > 0 && successful < total ? ` (${successful}/${total} runs ok)` : '';
+        return `perf=${p} a11y=${a} bp=${b} seo=${s}${lcp}${runSuffix}`;
       }
 
       case 'c5': {

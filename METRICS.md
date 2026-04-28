@@ -226,13 +226,25 @@ score = (mustPassed + 0.5 × shouldPassed) / (mustTotal + 0.5 × shouldTotal)
 
 ### C4 — Lighthouse performance
 
+**File:** `src/scorers/code-quality/c4-lighthouse.ts`
+
 **What it measures:** Lighthouse mobile-throttled performance score (0–1), plus raw CWV metrics (LCP, FCP, CLS, TBT, Speed Index).
 
-**How:** Runs Lighthouse 3 times, reports median. Mobile emulation: 360×640px, 2dpi. Score = Lighthouse performance score.
+**How (v0.2.0):** Runs Lighthouse up to 3 times in mobile emulation (360×640, 2 dpi) and reports the median of whichever runs succeed. Each invocation owns its own Chrome instance, torn down between runs, so a hung Chromium doesn't poison the next run.
+
+**Robustness budget:**
+- **Per-run timeout:** 90 s wall-clock. On timeout the run's Chrome is killed explicitly (the launcher's port may still be held by a hung renderer otherwise) and the next run starts fresh.
+- **Overall scorer timeout:** 240 s. If the budget is exhausted before all 3 runs complete, C4 scores whatever succeeded and records the rest as `timeout` outcomes.
+- **Lighthouse internal timeouts:** explicit `maxWaitForLoad: 45000`, `maxWaitForFcp: 30000` (Lighthouse defaults have shifted between major versions; pinning these makes results reproducible).
+- **Partial-success tolerance:** the scorer returns a score with as few as 1 successful run. If 0 runs succeed (timeout, runtime error, or missing result), `score: null` and `details.note` summarizes what failed.
+
+**Score:** Lighthouse performance category, median of successful runs.
 
 **Within-dimension weight (research):** 20% of Code Quality. Research uses Lighthouse 10 weights: LCP 25%, TBT 30%, CLS 25%, FCP 10%, Speed Index 10%.
 
 **Research anchor for judge rubric:** LCP 5 = <2.0s, 4 = 2.0–2.5s, 3 = 2.5–3.5s, 2 = 3.5–5.0s, 1 = >5.0s. INP: 5 = ≤200ms, 3 = 200–500ms, 1 = >500ms.
+
+**Why the v0.2 robustness rewrite:** v0.1 had no per-run timeout, no overall cap, and required all 3 runs to succeed. Slow networks or sites with hung requests could stall the entire batch for 5+ minutes. The new model bounds total time at 4 minutes worst-case while still producing a score from any run that completes.
 
 **Gap vs research:** Current scorer uses whatever Lighthouse version is installed. The research requires pinning to Lighthouse 12.x with a committed lockfile. Lighthouse uses lab data, not field data — acceptable for leaderboards since we want reproducible conditions, but should be documented in results metadata.
 
@@ -629,7 +641,7 @@ Either sub-check is N/A when its input is missing (no source ZIP for secrets, or
 | c1 | `code-quality/c1-eslint.ts` | 0.1.0 | typescript-eslint recommended only |
 | c2 | `code-quality/c2-types.ts` | 0.1.0 | tsc strict; ignores missing-module errors |
 | c3 | `code-quality/c3-axe.ts` | 0.1.0 | wcag2a/aa, wcag21a/aa, wcag22aa tags |
-| c4 | `code-quality/c4-lighthouse.ts` | 0.1.0 | 3-run median; mobile 360×640 |
+| c4 | `code-quality/c4-lighthouse.ts` | 0.2.0 | Up to 3-run median; mobile 360×640. Per-run 90s + overall 240s timeouts; tolerates ≥1 successful run; Chrome restarted between runs. |
 | c5 | `code-quality/c5-bundle-size.ts` | 0.2.0 | Gzipped JS+CSS payload via `page.on('response')` Content-Length (primary); uncompressed source bytes when no network capture (fallback). Lighthouse-aligned thresholds. |
 | c6 | `code-quality/c6-complexity.ts` | 0.1.0 | SonarJS cognitive-complexity threshold 15 |
 | c7 | `code-quality/c7-maintainability.ts` | 0.1.0 | Single judge; 5-criteria rubric; samples up to 12 source files |
