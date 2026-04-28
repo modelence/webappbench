@@ -76,14 +76,15 @@ async function loadRun(runDir: string): Promise<RunSummary | null> {
 // Matches the console output order in src/scorers/progress.ts.
 const ALL_DIMS = [
   'f1', 'f2', 'f4', 'f5', 'f6',
-  'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c9',
+  'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9',
   'v1', 'v2', 'v4',
   's1', 's2', 's3',
   'cost',
 ] as const;
 // Dimensions that require an extracted source ZIP — used to hide entire columns
-// when no submission in the report has source attached.
-const SOURCE_ONLY_DIMS = new Set(['f6', 'c1', 'c2', 'c5', 'c6', 'c7', 's1', 's2', 's3']);
+// when no submission in the report has source attached. (s1 is omitted — it
+// runs the deployed-header audit even without source.)
+const SOURCE_ONLY_DIMS = new Set(['f6', 'c1', 'c2', 'c5', 'c6', 'c7', 'c8', 's2', 's3']);
 type Dim = (typeof ALL_DIMS)[number];
 
 
@@ -130,11 +131,12 @@ const METRIC_META: Record<string, { label: string; group: string; desc: string }
   c5: { label: 'C5 bundle',      group: 'Code Quality',  desc: 'Uncompressed JS + CSS source size. Full marks up to 150 KB; linear penalty up to 1 MB; 0 above 1 MB. Source-only. Does not account for tree-shaking.' },
   c6: { label: 'C6 complexity',  group: 'Code Quality',  desc: 'Cognitive complexity via eslint-plugin-sonarjs. Functions exceeding threshold 15 are flagged. Score decays from 0 violations/1k LOC (1.0) to 10+/1k (0). Source-only.' },
   c7: { label: 'C7 maintain',    group: 'Code Quality',  desc: 'LLM judge over a sampled source excerpt scoring maintainability on 5 criteria 1–5: naming, separation of concerns, component reuse, prop typing, secret handling. Source-only.' },
+  c8: { label: 'C8 install',     group: 'Code Quality',  desc: '`npm ci` (or pnpm/yarn equivalent) run from a clean copy of the source. Binary: success = 1, any failure (missing lockfile, peer-dep conflicts, registry errors, postinstall crashes, timeout) = 0. Source-only.' },
   c9: { label: 'C9 SEO',         group: 'Code Quality',  desc: 'Deterministic DOM checks: title length (10–70 chars), meta description (50–300 chars), canonical URL, OG tags (title/description/type), html[lang], heading hierarchy.' },
   v1: { label: 'V1 visual',      group: 'Visual',        desc: 'MLLM visual judge (Gemini 2.5 Pro via OpenRouter). 8 criteria scored 1–5: visual hierarchy, typography, color harmony, whitespace, brand fit, CTA prominence, mobile layout, overall polish. Normalised to 0–1.' },
   v2: { label: 'V2 design',      group: 'Visual',        desc: 'Deterministic in-browser design heuristics: whitespace ratio (≥25% background), WCAG AA contrast pass rate (≥80% of text nodes), readable font sizes (≥80% ≥14px), line length (≥70% blocks ≤85ch).' },
   v4: { label: 'V4 responsive',  group: 'Visual',        desc: 'Playwright viewport tests at 360×800 (mobile), 768×1024 (tablet), 1440×900 (desktop). Checks: no horizontal overflow at each breakpoint + mobile touch targets ≥44px. 4 checks total.' },
-  s1: { label: 'S1 secrets',     group: 'Security',      desc: 'Regex scan for leaked credentials: OpenAI/Anthropic API keys, AWS access keys, GitHub PATs, PEM headers, hardcoded passwords. Any match = 0. Source-only.' },
+  s1: { label: 'S1 secrets+headers', group: 'Security',  desc: 'Two sub-checks: (1) regex scan for leaked credentials in source — OpenAI/Anthropic API keys, AWS access keys, GitHub PATs, PEM headers, hardcoded passwords; any match = 0. (2) Deployed HTTP header audit — CSP, HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy; score = passed/6. Final score = mean of whichever sub-checks ran.' },
   s2: { label: 'S2 auth',        group: 'Security',      desc: 'Auth-pattern scanner for AI-sitebuilder failures: Supabase service-role keys in client code, RLS disabled, JWT decode without verification, Firebase test mode, hardcoded admin emails/passwords. Severity-weighted; critical=10, high=5, medium=2 pts; decay to 0 at 20 pts. Source-only.' },
   s3: { label: 'S3 vulns',       group: 'Security',      desc: 'npm audit CVE count from the source lockfile. Weighted: critical×10 + high×3 + moderate×1 + low×0.1. Score decays to 0 at 20 weighted penalty points. Source-only.' },
   cost: { label: 'Cost',         group: 'Cost',          desc: 'Informational only — not included in composite score. Self-reported by user at submission: TTFR (time to first render), TTWB (time to working build), USD estimate.' },

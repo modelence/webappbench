@@ -24,7 +24,7 @@ Research target weights (dimension level):
 
 ### Conditional execution
 
-F1 is a gate: if the site does not render, all browser-dependent scorers (F2, F4, F5, C3, C4, C9, V1, V2, V4) are skipped and scored as null. Source-dependent scorers (F6, C1, C2, C5, C6, C7, S1, S2, S3) require a source ZIP.
+F1 is a gate: if the site does not render, all browser-dependent scorers (F2, F4, F5, C3, C4, C9, V1, V2, V4) are skipped and scored as null. Source-dependent scorers (F6, C1, C2, C5, C6, C7, C8, S2, S3) require a source ZIP. S1 has two sub-checks (secrets + deployed headers) and runs whichever inputs are available.
 
 ---
 
@@ -192,13 +192,13 @@ score = (mustPassed + 0.5 × shouldPassed) / (mustTotal + 0.5 × shouldTotal)
 
 **Within-dimension weight (research):** 10% of Code Quality.
 
-**Research spec (three sub-checks, only partial in v0.1):**
+**Research spec (three sub-checks, partially split across scorers):**
 
-1. **`env_setup_clean`** — `npm ci` succeeds from a fresh checkout with no workarounds (`--legacy-peer-deps`, patched `node_modules`). Catches the common AI failure: the tool worked around dep conflicts locally with stale `node_modules` but the committed `package.json` doesn't install cleanly. **Not implemented.**
+1. **`env_setup_clean`** — `npm ci` succeeds from a fresh checkout with no workarounds (`--legacy-peer-deps`, patched `node_modules`). **Implemented as C8 (separate scorer)** since "did it install" is a fundamentally different signal than "is the bundle small."
 2. **Bundle size and shape** — gzipped JS payload + route-split count. Current implementation measures raw source, not gzipped output. **Gap: no gzip measurement, no route-split count.**
-3. **Vulnerability and license hygiene** — `npm audit` for known-vulnerable packages + license compatibility scan. Audit is now in S3; license scan not implemented.
+3. **Vulnerability and license hygiene** — `npm audit` for known-vulnerable packages + license compatibility scan. Audit is in S3; license scan not implemented.
 
-**Recommended change:** Add `env_setup_clean` sub-check. Measure gzipped payload size from Playwright's `page.on('response')` or via `rollup-plugin-visualizer` output.
+**Recommended change:** Measure gzipped payload size from Playwright's `page.on('response')` or via `rollup-plugin-visualizer` output.
 
 ---
 
@@ -232,7 +232,27 @@ score = (mustPassed + 0.5 × shouldPassed) / (mustTotal + 0.5 × shouldTotal)
 
 ---
 
+### C8 — Clean install (env setup)
+
+**File:** `src/scorers/code-quality/c8-install.ts`
+
+**What it measures:** Whether the committed `package.json` + lockfile actually installs cleanly from a fresh checkout — no workarounds, no patched `node_modules`, no `--legacy-peer-deps`.
+
+**How:** Detects package manager from lockfile presence (`pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, else → npm). Copies the source tree to a temp directory excluding `node_modules`/`.git`/build artifacts. Runs the strict equivalent of `npm ci`: `npm ci --ignore-scripts` / `pnpm install --frozen-lockfile --ignore-scripts` / `yarn install --frozen-lockfile --ignore-scripts`. 240s timeout. Captures the failure summary (truncated to 400 chars) on non-zero exit.
+
+**Score:** Binary — 1 (install succeeded) or 0 (any failure: missing lockfile, peer-dep conflict, registry error, postinstall crash, timeout). Missing `package.json` returns null (not applicable).
+
+**Within-dimension weight (research):** Sub-check 1 of C5 in the research design (10% of Code Quality, split across three sub-checks). Promoted to a top-level scorer here because the failure mode it catches is qualitatively different from bundle-size measurement.
+
+**Why this matters:** AI sitebuilders' hosted environments hide install failures — Lovable/Bolt's runtime has stale `node_modules` from when the tool worked. The committed `package.json` often doesn't actually install on a clean checkout. Nothing else in the harness catches this; C5 measures bundle size on whatever files exist regardless of whether deps would install.
+
+**Gap vs research:** No detection of explicit workarounds (e.g., flagging `--legacy-peer-deps` if a tool's CI script uses it).
+
+---
+
 ### C9 — SEO hygiene
+
+**File:** `src/scorers/code-quality/c9-seo.ts`
 
 **What it measures:** Whether the generated site includes standard SEO metadata.
 
@@ -375,13 +395,18 @@ Score = passed checks / 4. Passed if score ≥ 0.75.
 
 Security is a top-level dimension, promoted from inside code quality because AI sitebuilders systematically produce well-styled pages with serious security failures — exposed service-role keys, missing CSP, RLS-off Supabase schemas — that are invisible to functional, visual, and most code-quality checks. Research target weight: **10% of composite**.
 
-### S1 — Secrets detection
+### S1 — Secrets + deployed headers
 
 **File:** `src/scorers/security/s1-secrets.ts`
 
-**What it measures:** Hardcoded API keys, tokens, passwords, and private keys present anywhere in the source tree.
+**What it measures:** Two independent sub-checks combined into one score:
 
-**How:** Scans all text files <1MB (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.html`, `.json`, `.env*`, `.yaml`, `.yml`, `.toml`, `.sh`), skipping `node_modules`, `.git`, `dist`, `build`, `.next`, `out`, `.cache`. Eight regex patterns:
+1. **Secrets** — hardcoded API keys, tokens, passwords, and private keys present in the source tree.
+2. **Deployed headers** — standard HTTP security headers present on the deployed URL.
+
+Either sub-check is N/A when its input is missing (no source ZIP for secrets, or unreachable URL for headers). Final score = mean of whichever sub-checks ran.
+
+**Sub-check 1 — secrets:** Scans all text files <1MB (`.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`, `.html`, `.json`, `.env*`, `.yaml`, `.yml`, `.toml`, `.sh`), skipping `node_modules`, `.git`, `dist`, `build`, `.next`, `out`, `.cache`. Eight regex patterns:
 
 | Pattern ID | Label |
 |---|---|
@@ -394,11 +419,24 @@ Security is a top-level dimension, promoted from inside code quality because AI 
 | `hardcoded_password` | Password/passwd/pwd assigned to a string literal |
 | `hardcoded_secret` | Secret/token/api_key assigned to a ≥20-char literal |
 
-**Score:** Binary — 1 (no findings) or 0 (any finding).
+Sub-score: 1 (no findings) or 0 (any finding).
 
-**Within-Security weight (research):** 40% (this scorer covers the secrets sub-check of S1; Semgrep OWASP ruleset and deployed HTTP header audit are planned for v0.2).
+**Sub-check 2 — deployed headers:** `fetch(submission.artifactUrl)` with a 10s timeout, lowercases all response header names, then checks 6 standard security headers. Each present + non-trivially-set header earns one point. Sub-score = `passed / 6`.
 
-**Gap vs research:** Full S1 also includes Semgrep OWASP Top-10 ruleset, `trufflehog filesystem`, and in v0.2 a deployed-header audit (CSP, HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy) via curl. These are not implemented.
+| Header | Present condition |
+|---|---|
+| `Content-Security-Policy` | Set, and not the `unsafe-inline + unsafe-eval + *` no-op pattern |
+| `Strict-Transport-Security` | `max-age=N` directive present |
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `DENY`/`SAMEORIGIN`, or CSP has a `frame-ancestors` directive |
+| `Referrer-Policy` | Set to anything other than `unsafe-url` |
+| `Permissions-Policy` | Set (legacy `Feature-Policy` also accepted) |
+
+**Pass condition:** Secrets sub-check finds 0 findings AND headers sub-check passes ≥4/6. If a sub-check is N/A, it cannot fail.
+
+**Within-Security weight (research):** 40%.
+
+**Gap vs research:** Full S1 also calls for a Semgrep OWASP Top-10 ruleset and `trufflehog filesystem` for broader-coverage secret scanning. Neither is implemented; the 8-pattern regex covers the most common AI-sitebuilder failure modes but misses customer-specific vendor key formats.
 
 ---
 
@@ -469,8 +507,8 @@ Security is a top-level dimension, promoted from inside code quality because AI 
 | Implement dimension-level weighting in `composite.ts` | Aligns composite with research design (F 40%, C 15%, V 20%, T 15%, S 10%) |
 | Add per-prompt `visualChecklist` to prompt YAML; wire into V1 | Enables per-task visual criteria instead of fixed 8-item rubric |
 | Add per-prompt functional checklist; wire into F4 | Replaces F4's fixed 4-criteria rubric with prompt-specific checklist |
-| Add `env_setup_clean` sub-check to C5 | Catches AI tools that commit broken `package.json` |
-| Add Semgrep OWASP ruleset + deployed header audit to S1 | Completes the full S1 research spec |
+| Add Semgrep OWASP ruleset + `trufflehog` to S1 | Broadens secret coverage beyond the 8 hand-coded regex patterns |
+| Measure gzipped bundle size in C5 | Replaces raw-source measurement with a more meaningful payload metric |
 
 ### v0.3 priority changes
 
@@ -515,11 +553,12 @@ Security is a top-level dimension, promoted from inside code quality because AI 
 | c5 | `code-quality/c5-bundle-size.ts` | 0.1.0 | Raw source bytes; no gzip; no env_setup_clean |
 | c6 | `code-quality/c6-complexity.ts` | 0.1.0 | SonarJS cognitive-complexity threshold 15 |
 | c7 | `code-quality/c7-maintainability.ts` | 0.1.0 | Single judge; 5-criteria rubric; samples up to 12 source files |
+| c8 | `code-quality/c8-install.ts` | 0.1.0 | Detects npm/pnpm/yarn from lockfile; runs strict `ci`/`--frozen-lockfile` in temp dir; 240s timeout |
 | c9 | `code-quality/c9-seo.ts` | 0.1.0 | 10 configurable checks |
 | v1 | `visual/v1-judge.ts` | 0.1.0 | Single judge; fixed 8-criteria rubric |
 | v2 | `visual/v2-design.ts` | 0.1.0 | 4 checks: whitespace, contrast, font size, line length |
 | v4 | `visual/v4-responsive.ts` | 0.1.0 | 3 viewports; horizontal overflow + touch targets |
-| s1 | `security/s1-secrets.ts` | 0.1.0 | 8 regex patterns; binary pass/fail |
+| s1 | `security/s1-secrets.ts` | 0.2.0 | Two sub-checks: 8-pattern source secrets scan + 6-header deployed audit; mean of whichever ran |
 | s2 | `security/s2-auth.ts` | 0.1.0 | 13 patterns; client-side awareness; weighted severity |
 | s3 | `security/s3-vuln.ts` | 0.1.2 | npm audit; critical=10, high=3, moderate=1, low=0.1 penalty |
 | cost | `cost.ts` | 0.1.0 | Self-reported; informational only |

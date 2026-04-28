@@ -116,10 +116,28 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
       }
 
       case 's1': {
-        const count = Number(d['findingsCount'] ?? 0);
-        if (count === 0) return 'no secrets found';
-        const patterns = (d['patternsSeen'] as string[] | undefined) ?? [];
-        return `${count} secret${count === 1 ? '' : 's'} found: ${patterns.join(', ')}`;
+        if (d['note']) return String(d['note']).slice(0, 60);
+        const secrets = d['secrets'] as Record<string, unknown> | undefined;
+        const headers = d['headers'] as Record<string, unknown> | undefined;
+        const parts: string[] = [];
+        if (secrets) {
+          const count = Number(secrets['findingsCount'] ?? 0);
+          if (count === 0) {
+            parts.push('no secrets');
+          } else {
+            const patterns = (secrets['patternsSeen'] as string[] | undefined) ?? [];
+            parts.push(`${count} secret${count === 1 ? '' : 's'}: ${patterns.join(', ')}`);
+          }
+        }
+        if (headers) {
+          const passed = Number(headers['passedCount'] ?? 0);
+          const total = Number(headers['totalCount'] ?? 0);
+          const outcomes = (headers['outcomes'] as Array<Record<string, unknown>>) ?? [];
+          const missing = outcomes.filter((o) => !o['present']).map((o) => String(o['id'])).slice(0, 3);
+          const suffix = missing.length ? ` — missing: ${missing.join(', ')}` : '';
+          parts.push(`${passed}/${total} headers${suffix}`);
+        }
+        return parts.join(' · ') || 'N/A';
       }
 
       case 's2': {
@@ -180,6 +198,16 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
         const bytes = Number(d['totalBytesUncompressed'] ?? 0);
         const jsFiles = Number(d['jsFileCount'] ?? 0);
         return `${(bytes / 1024).toFixed(0)}KB uncompressed · ${jsFiles} JS files`;
+      }
+
+      case 'c8': {
+        if (d['note']) return String(d['note']).slice(0, 60);
+        const manager = String(d['manager'] ?? '?');
+        const passed = d['exitCode'] === 0 && !d['timedOut'];
+        if (passed) return `${manager} install ok`;
+        const err = d['errorSummary'] as string | undefined;
+        const errSuffix = err ? ` — ${err.slice(0, 60)}` : '';
+        return `${manager} install failed${errSuffix}`;
       }
 
       case 'c9': {

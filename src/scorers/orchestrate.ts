@@ -17,6 +17,7 @@ import { runC4, C4_VERSION } from './code-quality/c4-lighthouse.ts';
 import { runC5, C5_VERSION } from './code-quality/c5-bundle-size.ts';
 import { runC6, C6_VERSION } from './code-quality/c6-complexity.ts';
 import { runC7, C7_VERSION } from './code-quality/c7-maintainability.ts';
+import { runC8, C8_VERSION } from './code-quality/c8-install.ts';
 import { runS1, S1_VERSION } from './security/s1-secrets.ts';
 import { runS2, S2_VERSION } from './security/s2-auth.ts';
 import { runS3, S3_VERSION } from './security/s3-vuln.ts';
@@ -123,6 +124,10 @@ export async function scoreSubmission(
     }
     results['cost'] = await runScorer('cost', () => runCost(submission, paths));
 
+    // S1 has two sub-checks (secrets + deployed headers); the header audit can run
+    // without source, so S1 lives outside the hasSource gate.
+    results['s1'] = await runScorer('s1', () => runS1(ctx));
+
     if (hasSource) {
       results['f6'] = await runScorer('f6', () => runF6(sourceDir, ctx.prompt.verbatimConstraints));
       results['c1'] = await runScorer('c1', () => runC1(sourceDir));
@@ -130,7 +135,7 @@ export async function scoreSubmission(
       results['c5'] = await runScorer('c5', () => runC5(sourceDir));
       results['c6'] = await runScorer('c6', () => runC6(sourceDir));
       results['c7'] = await runScorer('c7', () => runC7(ctx));
-      results['s1'] = await runScorer('s1', () => runS1(sourceDir));
+      results['c8'] = await runScorer('c8', () => runC8(sourceDir));
       results['s2'] = await runScorer('s2', () => runS2(sourceDir));
       results['s3'] = await runScorer('s3', () => runS3(sourceDir));
     }
@@ -161,7 +166,8 @@ export async function scoreSubmission(
       ...(hasSource && { c5: C5_VERSION }),
       ...(hasSource && { c6: C6_VERSION }),
       ...(hasSource && { c7: C7_VERSION }),
-      ...(hasSource && { s1: S1_VERSION }),
+      ...(hasSource && { c8: C8_VERSION }),
+      s1: S1_VERSION,
       ...(hasSource && { s2: S2_VERSION }),
       ...(hasSource && { s3: S3_VERSION }),
       c9: C9_VERSION,

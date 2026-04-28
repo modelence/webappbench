@@ -1,8 +1,14 @@
 import { extname, join } from 'node:path';
 import { readdir, readFile, stat } from 'node:fs/promises';
-import type { ScorerResult } from '../types.ts';
+import type { ScorerContext, ScorerResult } from '../types.ts';
 
-export const S1_VERSION = '0.1.0';
+export const S1_VERSION = '0.2.0';
+
+// S1 has two sub-checks per the research design:
+//  1. Hardcoded secrets in source (binary — any finding zeros this half).
+//  2. Deployed HTTP security headers (6 standard headers, per-header points).
+// Either sub-check is N/A when its input is missing (no source ZIP / no fetchable URL).
+// The final score is the mean of whichever sub-checks ran.
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'out', '.cache']);
 const TEXT_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.html', '.json', '.env', '.config', '.yaml', '.yml', '.toml', '.sh']);
@@ -20,16 +26,131 @@ const SECRET_PATTERNS = [
   { id: 'hardcoded_secret',   label: 'Hardcoded secret/token', regex: /(?:secret|token|api_key|apikey)\s*[:=]\s*["'][a-zA-Z0-9_/+=-]{20,}["']/i },
 ];
 
+// Standard security headers checked on the deployed response. Each present +
+// non-trivially-set header earns one point. Score = points / total.
+const HEADER_CHECKS: HeaderCheck[] = [
+  {
+    id: 'content_security_policy',
+    label: 'Content-Security-Policy',
+    headers: ['content-security-policy'],
+    isPresent: (v) => v.length > 0 && !/unsafe-inline.*unsafe-eval.*\*/i.test(v),
+  },
+  {
+    id: 'strict_transport_security',
+    label: 'Strict-Transport-Security',
+    headers: ['strict-transport-security'],
+    isPresent: (v) => /max-age=\s*\d+/i.test(v),
+  },
+  {
+    id: 'x_content_type_options',
+    label: 'X-Content-Type-Options',
+    headers: ['x-content-type-options'],
+    isPresent: (v) => /nosniff/i.test(v),
+  },
+  {
+    id: 'x_frame_options',
+    label: 'X-Frame-Options',
+    headers: ['x-frame-options', 'content-security-policy'],
+    // Either X-Frame-Options is set or CSP has frame-ancestors directive.
+    isPresent: (v, all) => /^(deny|sameorigin)$/i.test(v) || /frame-ancestors\s/i.test(all['content-security-policy'] ?? ''),
+  },
+  {
+    id: 'referrer_policy',
+    label: 'Referrer-Policy',
+    headers: ['referrer-policy'],
+    isPresent: (v) => v.length > 0 && !/^unsafe-url$/i.test(v),
+  },
+  {
+    id: 'permissions_policy',
+    label: 'Permissions-Policy',
+    headers: ['permissions-policy', 'feature-policy'],
+    isPresent: (v) => v.length > 0,
+  },
+];
+
+interface HeaderCheck {
+  id: string;
+  label: string;
+  headers: string[];
+  isPresent: (firstValue: string, allHeaders: Record<string, string>) => boolean;
+}
+
 interface SecretFinding {
   patternId: string;
   label: string;
   file: string;
   lineNumber: number;
-  snippet: string;  // redacted — shows only first 10 chars of matched value
+  snippet: string;  // redacted — shows only first 8 chars of matched value
 }
 
-export async function runS1(sourceDir: string): Promise<ScorerResult> {
+interface HeaderOutcome {
+  id: string;
+  label: string;
+  present: boolean;
+  value: string | null;
+}
+
+export async function runS1(ctx: ScorerContext): Promise<ScorerResult> {
   const start = Date.now();
+
+  const secrets = ctx.sourceDir ? await scanSecrets(ctx.sourceDir) : null;
+  const headers = await auditHeaders(ctx.submission.artifactUrl);
+
+  const subScores: number[] = [];
+  if (secrets) subScores.push(secrets.score);
+  if (headers) subScores.push(headers.score);
+
+  if (subScores.length === 0) {
+    return {
+      scorer: 's1',
+      version: S1_VERSION,
+      passed: null,
+      score: null,
+      details: { note: 'No source and no fetchable URL — s1 skipped', elapsedMs: Date.now() - start },
+    };
+  }
+
+  const score = subScores.reduce((a, b) => a + b, 0) / subScores.length;
+  const passed = secretsPassed(secrets) && headersPassed(headers);
+
+  return {
+    scorer: 's1',
+    version: S1_VERSION,
+    passed,
+    score,
+    details: {
+      secrets: secrets
+        ? {
+            findingsCount: secrets.findings.length,
+            uniquePatternCount: new Set(secrets.findings.map((f) => f.patternId)).size,
+            patternsSeen: [...new Set(secrets.findings.map((f) => f.patternId))],
+            findings: secrets.findings.slice(0, 20),
+            filesScanned: secrets.filesScanned,
+            score: secrets.score,
+          }
+        : { note: 'No source ZIP — secrets scan skipped' },
+      headers: headers
+        ? {
+            url: headers.url,
+            status: headers.status,
+            outcomes: headers.outcomes,
+            passedCount: headers.outcomes.filter((o) => o.present).length,
+            totalCount: headers.outcomes.length,
+            score: headers.score,
+          }
+        : { note: 'Could not fetch deployed URL — header audit skipped' },
+      elapsedMs: Date.now() - start,
+    },
+  };
+}
+
+interface SecretsResult {
+  findings: SecretFinding[];
+  filesScanned: number;
+  score: number;
+}
+
+async function scanSecrets(sourceDir: string): Promise<SecretsResult> {
   const files = await collectFiles(sourceDir);
   const findings: SecretFinding[] = [];
 
@@ -55,22 +176,72 @@ export async function runS1(sourceDir: string): Promise<ScorerResult> {
     }
   }
 
-  const uniquePatterns = new Set(findings.map((f) => f.patternId));
-
   return {
-    scorer: 's1',
-    version: S1_VERSION,
-    passed: findings.length === 0,
+    findings,
+    filesScanned: files.length,
     score: findings.length === 0 ? 1 : 0,
-    details: {
-      findingsCount: findings.length,
-      uniquePatternCount: uniquePatterns.size,
-      patternsSeen: [...uniquePatterns],
-      findings: findings.slice(0, 20),
-      filesScanned: files.length,
-      elapsedMs: Date.now() - start,
-    },
   };
+}
+
+interface HeadersResult {
+  url: string;
+  status: number | null;
+  outcomes: HeaderOutcome[];
+  score: number;
+}
+
+async function auditHeaders(url: string): Promise<HeadersResult | null> {
+  let response: Response;
+  try {
+    // 10s budget — most static deploys respond well under this.
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 10_000);
+    try {
+      response = await fetch(url, { method: 'GET', redirect: 'follow', signal: ac.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch {
+    return null;
+  }
+
+  // Lowercase all header names for case-insensitive lookup.
+  const headerMap: Record<string, string> = {};
+  response.headers.forEach((value, name) => {
+    headerMap[name.toLowerCase()] = value;
+  });
+
+  const outcomes: HeaderOutcome[] = HEADER_CHECKS.map((check) => {
+    const matchingHeader = check.headers.find((h) => headerMap[h] !== undefined);
+    const value = matchingHeader ? headerMap[matchingHeader]! : '';
+    const present = matchingHeader ? check.isPresent(value, headerMap) : false;
+    return {
+      id: check.id,
+      label: check.label,
+      present,
+      value: matchingHeader ? value : null,
+    };
+  });
+
+  const passed = outcomes.filter((o) => o.present).length;
+  return {
+    url,
+    status: response.status,
+    outcomes,
+    score: passed / outcomes.length,
+  };
+}
+
+function secretsPassed(secrets: SecretsResult | null): boolean {
+  // If secrets sub-check didn't run, we can't fail on it.
+  return secrets === null || secrets.findings.length === 0;
+}
+
+function headersPassed(headers: HeadersResult | null): boolean {
+  // If header audit didn't run, we can't fail on it. Otherwise require ≥4/6.
+  if (headers === null) return true;
+  const passedCount = headers.outcomes.filter((o) => o.present).length;
+  return passedCount >= 4;
 }
 
 async function collectFiles(dir: string): Promise<string[]> {
