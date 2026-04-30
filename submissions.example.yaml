@@ -11,15 +11,23 @@
 #
 # Only `tool`, `prompt`, and `url` are required. Everything else is optional
 # user-reported metadata (folded into the Cost scorer).
+#
+# Optional `source` ZIP unlocks the source-only scorers: F6 (verbatim
+# constraints), C1 (ESLint), C2 (TypeScript), C5 (source-byte side-stat
+# alongside the gzipped network signal), C6 (complexity), C7 (maintainability
+# judge), C8 (clean install), S2 (auth patterns), S3 (npm audit). Without
+# source, the URL alone scores ~10 dimensions covering render, acceptance
+# criteria, judges, performance, accessibility, SEO, headers, and visual.
 
 schema: 1
 runs:
+  # Tier 1 — landing page. URL alone is enough; source ZIP is optional but
+  # unlocks 9 additional scorers for full code-quality coverage.
   - tool: lovable
     prompt: nimbus-notes-landing
     url: https://example-nimbus-abc.lovable.app/
-    # Optional source ZIP — export from Lovable → GitHub and download, or use the
-    # tool's "Download code" option. Unlocks F6 (verbatim constraints), C1 (ESLint
-    # lint density), and C5 (uncompressed bundle size) scorers.
+    # Optional source ZIP — export from Lovable → GitHub and download, or use
+    # the tool's "Download code" option.
     # source: ./source-exports/lovable-nimbus.zip
     # Optional timing + cost:
     # promptSubmittedAt: 2026-04-24T18:00:00Z
@@ -33,6 +41,10 @@ runs:
     prompt: nimbus-notes-landing
     url: https://nimbus-v0.vercel.app/
 
+  # Tier 2 — stateful localStorage app. F2's setup actions exercise empty-state,
+  # add-task, persistence-across-reload, and other stateful flows; see
+  # prompts/corpus/todo-localstorage.yaml for the full acceptance YAML.
   - tool: replit
-    prompt: nimbus-notes-landing
-    url: https://nimbus-notes.your-handle.repl.co/
+    prompt: todo-localstorage
+    url: https://daily-todo.your-handle.repl.co/
+    # source: ./source-exports/replit-todo.zip

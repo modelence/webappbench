@@ -225,4 +225,6 @@ When a release ships:
 2. Move the relevant items in this file from 📋/🚧 to ✅
 3. Update the per-scorer notes in [METRICS.md](METRICS.md)'s scorer version history table
 4. Update the metric tables in [README.md](README.md) if any scorer changed semantics
-5. Tag the commit `v0.X.Y`
+5. Bump `package.json`'s `version` field to match the release tag
+6. Add a dated entry to [CHANGELOG.md](CHANGELOG.md) summarizing what shipped (Added / Changed / Fixed / Removed groupings)
+7. Tag the commit `v0.X.Y`
