@@ -4,11 +4,21 @@ import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import type { Prompt } from '../core/types.ts';
 
+const setupActionSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('evaluate'), expr: z.string().min(1) }),
+  z.object({ kind: z.literal('fill'), locator: z.string().min(1), value: z.string() }),
+  z.object({ kind: z.literal('click'), locator: z.string().min(1) }),
+  z.object({ kind: z.literal('press'), locator: z.string().min(1), key: z.string().min(1) }),
+  z.object({ kind: z.literal('reload') }),
+  z.object({ kind: z.literal('waitFor'), locator: z.string().min(1) }),
+]);
+
 const acceptanceCriterionSchema = z.object({
   id: z.string().min(1),
   locator: z.string().min(1),
   assert: z.string().min(1),
   custom: z.string().optional(),
+  setup: z.array(setupActionSchema).optional(),
 });
 
 const verbatimConstraintSchema = z.object({

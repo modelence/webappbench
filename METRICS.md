@@ -110,6 +110,10 @@ score = (mustPassed + 0.5 × shouldPassed) / (mustTotal + 0.5 × shouldTotal)
 
 `passed` is true only if all `mustHave` criteria pass.
 
+**Setup actions (v0.2.0):** Each criterion may carry an optional `setup: []` array of state-mutating actions that run **before** the locator is evaluated. This unlocks stateful testing — empty-state checks (clear localStorage + reload), persistence checks (fill + reload + assert), CRUD-after-action checks. Without setup, F2 could only express assertions against a freshly-loaded page; setup makes it possible to verify that the app actually *works*, not just that it has the right shape.
+
+Supported action kinds: `evaluate` (run JS via `page.evaluate`), `fill` (type into a textbox), `click`, `press` (keyboard key), `reload` (`page.reload()`), `waitFor` (wait for a locator to be visible). Steps run sequentially; any failure aborts the criterion with a `setup failed: step N (<kind>): <error>` note. Per-step timeouts: 5s for locator-based actions, 10s for `evaluate`. The Tier 2 corpus prompt [`todo-localstorage.yaml`](../prompts/corpus/todo-localstorage.yaml) is the worked example.
+
 **Within-dimension weight (research):** 30% of the Functional dimension.
 
 **Gap vs research:** The research recommends role/label-based locators only (`getByRole`, `getByLabel`) to survive DOM changes across builds. The current implementation allows arbitrary Playwright expressions — prompt authors should be disciplined about locator choice.
@@ -634,7 +638,7 @@ Either sub-check is N/A when its input is missing (no source ZIP for secrets, or
 | Scorer | File | Version | Notes |
 |---|---|---|---|
 | f1 | `functional/f1-render.ts` | 0.1.0 | Fixed 30s timeout; 8s network-idle cap |
-| f2 | `functional/f2-acceptance.ts` | 0.1.0 | mustHave / shouldHave weighting |
+| f2 | `functional/f2-acceptance.ts` | 0.2.0 | mustHave / shouldHave weighting; per-criterion `setup` actions (evaluate / fill / click / press / reload / waitFor) for stateful prompts |
 | f4 | `functional/f4-judge.ts` | 0.2.0 | Single judge; 4 default criteria + per-prompt `functional_checklist.extra`; missing-features list |
 | f5 | `functional/f5-errors.ts` | 0.1.0 | Linear decay at 10 errors |
 | f6 | `functional/f6-verbatim.ts` | 0.1.0 | exact_copy, hex_value, structural types |

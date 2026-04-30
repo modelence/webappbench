@@ -1,0 +1,135 @@
+id: todo-localstorage
+tier: 2
+prompt: |
+  Build a single-user todo app called "Daily" that persists to localStorage
+  (no backend). Functionality:
+    - An input to add new tasks; pressing Enter or clicking "Add" creates a task.
+    - Each task has a checkbox to mark it complete and a delete button (✕).
+    - Completed tasks are visually distinguished (strike-through or muted color).
+    - A filter bar with three options: All / Active / Completed (only one active
+      at a time).
+    - A "Clear completed" action that removes every completed task at once.
+    - All state persists to localStorage; closing the tab and reopening must
+      restore the task list with completion states intact.
+    - Empty state when no tasks exist: friendly copy that includes the literal
+      text "No tasks yet" and a hint inviting the user to add one. Do not show
+      a blank pane or a placeholder spinner.
+  Visual: clean and minimal. Single column, ~480px wide on desktop. The
+  filter bar lives directly under the input; the task list is below the filter.
+
+# Every criterion below clears localStorage and reloads first, so each runs
+# against a known empty state regardless of what the previous criterion did.
+must_have:
+  # 1. Empty-state copy is present on a fresh load.
+  - id: empty_state_copy
+    setup:
+      - kind: evaluate
+        expr: "() => localStorage.clear()"
+      - kind: reload
+    locator: "getByText(/no tasks yet/i)"
+    assert: "toBeVisible"
+
+  # 2. Adding a task makes it appear in a list-like region (li, role=listitem,
+  #    or a div with the literal task text — accepts any of the three to
+  #    survive markup variation).
+  - id: add_task_appears
+    setup:
+      - kind: evaluate
+        expr: "() => localStorage.clear()"
+      - kind: reload
+      - kind: fill
+        locator: "getByRole('textbox')"
+        value: "Buy milk"
+      - kind: press
+        locator: "getByRole('textbox')"
+        key: "Enter"
+    locator: "getByText('Buy milk', { exact: true })"
+    assert: "toBeVisible"
+
+  # 3. Persistence: add a task, reload, task still present. This is the
+  #    discriminator — localStorage round-trip with intact text.
+  - id: persists_across_reload
+    setup:
+      - kind: evaluate
+        expr: "() => localStorage.clear()"
+      - kind: reload
+      - kind: fill
+        locator: "getByRole('textbox')"
+        value: "Persistent task"
+      - kind: press
+        locator: "getByRole('textbox')"
+        key: "Enter"
+      - kind: reload
+    locator: "getByText('Persistent task', { exact: true })"
+    assert: "toBeVisible"
+
+should_have:
+  # 4. Filter bar exists with the three canonical options.
+  - id: filter_options_present
+    setup:
+      - kind: evaluate
+        expr: "() => localStorage.clear()"
+      - kind: reload
+    locator: "getByRole('button', { name: /^(all|active|completed)$/i }).or(getByRole('link', { name: /^(all|active|completed)$/i }))"
+    assert: "toHaveCountAtLeast(3)"
+
+  # 5. Marking a task complete adds a strike-through or "completed" class.
+  #    We assert via DOM inspection — any element whose text matches our task
+  #    AND whose computed text-decoration includes line-through OR whose
+  #    closest ancestor has a class containing "complete" or "done".
+  - id: completion_styling
+    setup:
+      - kind: evaluate
+        expr: "() => localStorage.clear()"
+      - kind: reload
+      - kind: fill
+        locator: "getByRole('textbox')"
+        value: "Mark me done"
+      - kind: press
+        locator: "getByRole('textbox')"
+        key: "Enter"
+      - kind: click
+        locator: "getByRole('checkbox').first()"
+    locator: "locator('[class*=\"complete\" i], [class*=\"done\" i], [style*=\"line-through\"], s, del').filter({ hasText: /mark me done/i })"
+    assert: "toHaveCountAtLeast(1)"
+
+  # 6. Clear-completed action exists and is reachable.
+  - id: clear_completed_button
+    setup:
+      - kind: evaluate
+        expr: "() => localStorage.clear()"
+      - kind: reload
+    locator: "getByRole('button', { name: /clear completed/i })"
+    assert: "toBeVisible"
+
+verbatim_constraints:
+  - type: exact_copy
+    value: "No tasks yet"
+    where: "empty-state copy on a fresh load"
+
+seo_applicable:
+  - title
+  - lang
+  - heading_hierarchy
+
+# Tier 2 apps deliberately use placeholder copy ("Buy milk", "Persistent task")
+# during testing — skip the V1 copy-quality criteria so the judge doesn't
+# penalize generic content that we authored.
+visual_checklist:
+  placeholder_copy: true
+  extra:
+    - id: list_input_density
+      label: List/input density
+      description: >
+        Input field is the most prominent element on first load; the
+        empty-state copy doesn't crowd or overlap the input.
+
+functional_checklist:
+  extra:
+    - id: cleared_completed_only_removes_done
+      label: 'Clear-completed only removes completed tasks'
+      description: >
+        After completing one task and leaving another active, clicking
+        "Clear completed" removes only the completed task; the active task
+        remains visible. (Judges based on screenshots — F2 covers the
+        deterministic version.)

@@ -49,7 +49,22 @@ export interface AcceptanceCriterion {
   locator: string;
   assert: string;
   custom?: string;
+  // Optional setup actions performed against the page before the locator is
+  // evaluated. Used by stateful prompts (Tier 2+ apps) to drive the page into
+  // a specific state — clear localStorage, fill a field, click a button,
+  // reload — so the assertion runs against meaningful state instead of a
+  // freshly-loaded page. Each step runs sequentially; an error in any step
+  // fails the criterion.
+  setup?: SetupAction[];
 }
+
+export type SetupAction =
+  | { kind: 'evaluate'; expr: string }                       // page.evaluate(<expr>)
+  | { kind: 'fill'; locator: string; value: string }         // typing into a textbox/textarea
+  | { kind: 'click'; locator: string }                       // clicking a button/link
+  | { kind: 'press'; locator: string; key: string }          // pressing a keyboard key
+  | { kind: 'reload' }                                        // page.reload()
+  | { kind: 'waitFor'; locator: string };                    // wait for locator to be visible
 
 export interface VerbatimConstraint {
   type: 'exact_copy' | 'hex_value' | 'structural';

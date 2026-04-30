@@ -1,10 +1,16 @@
 import type { Locator, Page } from '@playwright/test';
-import type { AcceptanceCriterion } from '../../core/types.ts';
+import type { AcceptanceCriterion, SetupAction } from '../../core/types.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
 
-export const F2_VERSION = '0.1.0';
+export const F2_VERSION = '0.2.0';
 
 const VISIBILITY_TIMEOUT_MS = 5_000;
+// Used by setup actions (fill/click/press/waitFor) — same budget as
+// VISIBILITY_TIMEOUT_MS so a missing element doesn't hang the run.
+const SETUP_LOCATOR_TIMEOUT_MS = 5_000;
+// page.evaluate() during setup gets a longer budget because some prompts
+// chain reload + DOM waits via the script (rare but legal).
+const SETUP_EVALUATE_TIMEOUT_MS = 10_000;
 
 type BoundingBoxAxis = 'x' | 'y' | 'width' | 'height';
 
@@ -59,6 +65,12 @@ async function evalCriterion(
   kind: 'must' | 'should',
 ): Promise<CriterionOutcome> {
   try {
+    if (c.setup && c.setup.length > 0) {
+      const setupErr = await runSetup(page, c.setup);
+      if (setupErr) {
+        return { id: c.id, kind, passed: false, note: `setup failed: ${setupErr}` };
+      }
+    }
     const locator = buildLocator(page, c.locator);
     const assertOk = await runAssertion(locator, c.assert);
     if (!assertOk) {
@@ -78,6 +90,70 @@ async function evalCriterion(
       passed: false,
       note: err instanceof Error ? err.message : String(err),
     };
+  }
+}
+
+// Runs setup actions sequentially against the page. Returns an error string
+// describing the first action that failed, or null on success. Used by stateful
+// prompts to drive the page into a specific state before the locator runs.
+async function runSetup(page: Page, actions: SetupAction[]): Promise<string | null> {
+  for (let i = 0; i < actions.length; i++) {
+    const action = actions[i]!;
+    const label = `step ${i + 1} (${action.kind})`;
+    try {
+      await runSetupStep(page, action);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return `${label}: ${msg.slice(0, 200)}`;
+    }
+  }
+  return null;
+}
+
+async function runSetupStep(page: Page, action: SetupAction): Promise<void> {
+  switch (action.kind) {
+    case 'evaluate': {
+      // The expression is passed as a string so prompt authors can write
+      // either `() => localStorage.clear()` (a function) or
+      // `localStorage.clear()` (a statement). Playwright's page.evaluate
+      // accepts a string and wraps it as the body of a browser-side function,
+      // so both forms work without us reconstructing the function ourselves.
+      // 10s budget guards against accidental infinite loops.
+      await Promise.race([
+        page.evaluate(action.expr),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`evaluate timed out after ${SETUP_EVALUATE_TIMEOUT_MS}ms`)), SETUP_EVALUATE_TIMEOUT_MS),
+        ),
+      ]);
+      return;
+    }
+    case 'fill': {
+      const locator = buildLocator(page, action.locator);
+      await locator.first().waitFor({ state: 'visible', timeout: SETUP_LOCATOR_TIMEOUT_MS });
+      await locator.first().fill(action.value);
+      return;
+    }
+    case 'click': {
+      const locator = buildLocator(page, action.locator);
+      await locator.first().waitFor({ state: 'visible', timeout: SETUP_LOCATOR_TIMEOUT_MS });
+      await locator.first().click();
+      return;
+    }
+    case 'press': {
+      const locator = buildLocator(page, action.locator);
+      await locator.first().waitFor({ state: 'visible', timeout: SETUP_LOCATOR_TIMEOUT_MS });
+      await locator.first().press(action.key);
+      return;
+    }
+    case 'reload': {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      return;
+    }
+    case 'waitFor': {
+      const locator = buildLocator(page, action.locator);
+      await locator.first().waitFor({ state: 'visible', timeout: SETUP_LOCATOR_TIMEOUT_MS });
+      return;
+    }
   }
 }
 

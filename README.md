@@ -10,7 +10,7 @@ The output is a per-run JSON artifact and a static HTML leaderboard (`leaderboar
 
 **No browser automation of the sitebuilders.** Playwright-driven sign-ins get accounts banned (confirmed with Lovable), so submission is manual; scoring is fully automated.
 
-See [METRICS.md](METRICS.md) for the full per-scorer spec, weights, and rationale, and [ai-sitebuilder-benchmark-design.md](ai-sitebuilder-benchmark-design.md) for the research design behind the scoring choices.
+See [METRICS.md](METRICS.md) for the full per-scorer spec, weights, and rationale, and [ROADMAP.md](ROADMAP.md) for what's shipped vs planned per release.
 
 ## Metrics tracked
 
@@ -152,17 +152,77 @@ Each prompt is a YAML file under `prompts/corpus/`. Required fields:
 - `id` — kebab-case, must match the filename.
 - `tier` — 1 / 2 / 3 (difficulty).
 - `prompt` — the natural-language prompt sent to the sitebuilder.
-- `must_have` / `should_have` — Playwright assertions used by F2.
+- `must_have` / `should_have` — F2 acceptance criteria (see "Acceptance criteria" below).
 - `verbatim_constraints` — exact strings / hex values / structural identifiers used by F6.
 - `seo_applicable` — list of SEO checks C9 should apply.
 
 Optional fields:
 
 - `visual_checklist.extra[]` — per-prompt criteria added to V1's default rubric.
-- `visual_checklist.placeholder_copy` — set `true` to skip V1's 3 copy-quality defaults when the prompt explicitly invites placeholder content.
+- `visual_checklist.placeholder_copy` — set `true` to skip V1's 3 copy-quality defaults when the prompt explicitly invites placeholder content (e.g., a todo app prompt that asks for sample tasks).
 - `functional_checklist.extra[]` — per-prompt criteria added to F4's default rubric.
 
-See [`prompts/corpus/saas-pricing-page.yaml`](prompts/corpus/saas-pricing-page.yaml) for a worked example with both checklist extras.
+### Acceptance criteria
+
+Each criterion is `{ id, locator, assert, custom?, setup? }`:
+
+- `locator` — a Playwright expression evaluated against `page` (e.g. `getByRole('button', { name: /submit/i })`)
+- `assert` — `toBeVisible`, `toHaveCount(N)`, or `toHaveCountAtLeast(N)`
+- `custom` — optional bounding-box check like `boundingBox.y < 800`
+- `setup` — optional sequence of actions that run **before** the locator is evaluated (F2 0.2+). Use this for stateful prompts that need to drive the page into a specific state.
+
+#### Setup actions
+
+| Kind | Args | Use for |
+|---|---|---|
+| `evaluate` | `expr: string` | Run JS in the page (e.g. `() => localStorage.clear()`) |
+| `fill` | `locator`, `value` | Type into a textbox/textarea |
+| `click` | `locator` | Click a button/link |
+| `press` | `locator`, `key` | Press a key (e.g. `Enter`) |
+| `reload` | — | `page.reload()` — used to verify persistence |
+| `waitFor` | `locator` | Wait for an element to appear |
+
+Setup steps run sequentially. If any step fails, the criterion fails with a `setup failed: <step description>` note.
+
+#### Default empty-state criterion (Tier 2+ apps)
+
+Every Tier 2/3 app prompt should include a `must_have` criterion that verifies the empty-state copy renders on a fresh load (`localStorage.clear()` + `reload`, then assert empty-state text is visible). This is the single most common AI app failure: the page renders fine with seed data, then crashes or shows a blank pane on zero-record state.
+
+Example from [`prompts/corpus/todo-localstorage.yaml`](prompts/corpus/todo-localstorage.yaml):
+
+```yaml
+must_have:
+  - id: empty_state_copy
+    setup:
+      - kind: evaluate
+        expr: "() => localStorage.clear()"
+      - kind: reload
+    locator: "getByText(/no tasks yet/i)"
+    assert: "toBeVisible"
+```
+
+#### Worked example: persistence test
+
+Add a task, reload the page, confirm the task survives — the canonical localStorage round-trip:
+
+```yaml
+- id: persists_across_reload
+  setup:
+    - kind: evaluate
+      expr: "() => localStorage.clear()"
+    - kind: reload
+    - kind: fill
+      locator: "getByRole('textbox')"
+      value: "Persistent task"
+    - kind: press
+      locator: "getByRole('textbox')"
+      key: "Enter"
+    - kind: reload
+  locator: "getByText('Persistent task', { exact: true })"
+  assert: "toBeVisible"
+```
+
+See [`prompts/corpus/todo-localstorage.yaml`](prompts/corpus/todo-localstorage.yaml) for the full Tier 2 example. For a landing-page example with checklist extras, see [`prompts/landing-extra/saas-pricing-page.yaml`](prompts/landing-extra/saas-pricing-page.yaml) (archived from v0.1).
 
 ## Layout
 
@@ -183,9 +243,12 @@ src/
     format.ts            # Per-scorer one-line summaries
   report/generate.ts     # JSON artifacts → static HTML leaderboard
   cli.ts                 # Commander entrypoint
-prompts/corpus/          # YAML prompts (one per file)
+prompts/
+  corpus/                # Active corpus — one Tier 1 landing + one Tier 2 localStorage app
+  landing-extra/         # Archived v0.1 landing prompts; load with --corpus prompts/landing-extra for ad-hoc runs
 artifacts/               # .gitignored — scored runs land here
 METRICS.md               # Full per-scorer documentation, weights, rationale
+ROADMAP.md               # Shipped vs planned per release
 ```
 
 ## Caveats
@@ -195,6 +258,7 @@ METRICS.md               # Full per-scorer documentation, weights, rationale
 - **What the tool publishes is what gets scored.** Some tools render differently in their in-editor preview than at the deployed URL. The deployed URL is what ships to users, so that's the score that counts.
 - **Do not automate sitebuilder UIs.** Playwright-driven sign-in gets accounts banned. Submission is manual by design.
 - **Single-judge bias on V1/F4/C7.** All three judge scorers currently use one model from one provider, which inflates scores when the tool's backing LLM matches the judge's family. Cross-family dual-judge protocol is planned for v0.3.
+- **Backend correctness, auth, and server-side security are out of scope for v0.2.** The current corpus is one landing page (Tier 1) + one localStorage-only app (Tier 2). A backend-bearing CRM (Tier 3) plus three new scorers (F7 auth round-trip, F8 cross-session backend persistence, S4 backend security probes for the canonical Supabase-RLS-off failure) land in v0.3. Tools that ship a real backend natively (Lovable, Replit Agent) and tools that don't (Claude Artifacts, frontend-only v0) score the same in v0.2 — that's an honest scope limitation, not a measurement claim.
 
 ## License
 
