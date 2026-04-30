@@ -1,21 +1,6 @@
-export type ToolName =
-  | 'lovable'
-  | 'replit'
-  | 'same-new'
-  | 'v0'
-  | 'bolt'
-  | 'claude-artifacts'
-  | 'modelence';
+export type ToolName = string;
 
-export const ALL_TOOLS: readonly ToolName[] = [
-  'lovable',
-  'replit',
-  'same-new',
-  'v0',
-  'bolt',
-  'claude-artifacts',
-  'modelence',
-];
+export const TOOL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 
 export interface Prompt {
   id: string;

@@ -11,12 +11,12 @@ import {
 } from './artifact.ts';
 import { extractZip } from './extract.ts';
 import { loadPrompt } from '../prompts/schema.ts';
-import { ALL_TOOLS } from './types.ts';
+import { TOOL_NAME_PATTERN } from './types.ts';
 import { isoWeek } from './version.ts';
 import type { Prompt, ToolName, UserReportedCost, UserReportedTiming } from './types.ts';
 
 export const submissionSchema = z.object({
-  tool: z.enum(ALL_TOOLS as unknown as [ToolName, ...ToolName[]]),
+  tool: z.string().regex(TOOL_NAME_PATTERN, 'tool must be lowercase kebab-case'),
   toolVersion: z.string().min(1),
   promptId: z.string().regex(/^[a-z0-9-]+$/),
   runIdx: z.number().int().nonnegative(),

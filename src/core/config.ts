@@ -1,11 +1,10 @@
 import { readFile } from 'node:fs/promises';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
-import { ALL_TOOLS } from './types.ts';
-import type { ToolName } from './types.ts';
+import { TOOL_NAME_PATTERN } from './types.ts';
 
 const entrySchema = z.object({
-  tool: z.enum(ALL_TOOLS as unknown as [ToolName, ...ToolName[]]),
+  tool: z.string().regex(TOOL_NAME_PATTERN, 'tool must be lowercase kebab-case'),
   prompt: z.string().regex(/^[a-z0-9-]+$/, 'prompt must be kebab-case'),
   url: z.string().url(),
   source: z.string().optional(),  // local path to .zip of the generated source code

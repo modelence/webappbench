@@ -272,9 +272,9 @@ function renderHtml(runs: RunSummary[]): string {
     const dimCells = visibleDims.map((d) => renderScoreCell(r.scores[d]?.score)).join('');
     const toolSlug = escape(r.tool);
     return `<tr>
+      <td class="tool-cell"><span class="tool-pill">${toolSlug}</span></td>
       ${scoreCell}
       ${dimensionCells}
-      <td class="tool-cell"><span class="tool-pill">${toolSlug}</span></td>
       <td class="prompt-cell">${escape(r.promptId)}</td>
       <td class="link-cell"><a href="${escape(r.artifactUrl)}" target="_blank" rel="noopener" title="Open live site">↗</a></td>
       <td class="ver-cell">${escape(r.toolVersion)}</td>
@@ -298,9 +298,9 @@ function renderHtml(runs: RunSummary[]): string {
       const dimCells = visibleDims.map((d) => renderScoreCell(agg.dims[d])).join('');
       return `<tr>
         <td class="rank-cell">${medal}</td>
+        <td class="tool-cell"><span class="tool-pill">${escape(tool)}</span></td>
         ${scoreCell}
         ${dimensionCells}
-        <td class="tool-cell"><span class="tool-pill">${escape(tool)}</span></td>
         <td class="runs-cell">${agg.runs} run${agg.runs === 1 ? '' : 's'}</td>
         ${dimCells}
       </tr>`;
@@ -660,9 +660,10 @@ function renderHtml(runs: RunSummary[]): string {
     <table>
       <thead><tr>
         <th style="width:48px"></th>
+        <th>Tool</th>
         <th>Score</th>
         ${dimensionColumnHeaders}
-        <th>Tool</th><th>Runs</th>
+        <th>Runs</th>
         ${dimHeaders}
       </tr></thead>
       <tbody>${summaryRows || `<tr><td colspan="${leaderColCount}" class="empty">No scored runs yet.</td></tr>`}</tbody>
@@ -675,9 +676,10 @@ function renderHtml(runs: RunSummary[]): string {
   <div class="table-wrap">
     <table>
       <thead><tr>
+        <th>Tool</th>
         <th>Score</th>
         ${dimensionColumnHeaders}
-        <th>Tool</th><th>Prompt</th><th>URL</th><th>Version</th>
+        <th>Prompt</th><th>URL</th><th>Version</th>
         ${dimHeaders}
       </tr></thead>
       <tbody>${perRunRows || `<tr><td colspan="${perRunColCount}" class="empty">No scored runs yet.</td></tr>`}</tbody>

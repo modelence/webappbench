@@ -1,9 +1,11 @@
+import { readdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Command, InvalidArgumentError } from 'commander';
 import { loadDotenv } from './core/env.ts';
 
 await loadDotenv();
 import { createSubmissionArtifact } from './core/submission.ts';
-import { ALL_TOOLS } from './core/types.ts';
+import { TOOL_NAME_PATTERN } from './core/types.ts';
 import type { ToolName, UserReportedCost, UserReportedTiming } from './core/types.ts';
 import { loadCorpus } from './prompts/schema.ts';
 import { computeComposite, formatComposite, formatCompositeBreakdown } from './scorers/composite.ts';
@@ -22,12 +24,40 @@ program
 
 program
   .command('tools')
-  .description('List supported tools')
-  .action(() => {
-    for (const t of ALL_TOOLS) {
+  .description('List tools that have artifacts on disk (any kebab-case name is accepted at submit time)')
+  .option('-a, --artifacts <dir>', 'Artifacts root', 'artifacts')
+  .action(async (opts: { artifacts: string }) => {
+    const tools = await listToolsWithArtifacts(opts.artifacts);
+    if (tools.length === 0) {
+      console.log(`No tools found under ${opts.artifacts}/.`);
+      console.log('Submit a run first: npm run bench -- submit --tool <name> --prompt <id> --url <url>');
+      return;
+    }
+    for (const t of tools) {
       console.log(t);
     }
   });
+
+async function listToolsWithArtifacts(artifactsRoot: string): Promise<string[]> {
+  let entries: string[];
+  try {
+    entries = await readdir(artifactsRoot);
+  } catch (err: unknown) {
+    if (isNodeError(err) && err.code === 'ENOENT') return [];
+    throw err;
+  }
+  const tools: string[] = [];
+  for (const name of entries) {
+    if (!TOOL_NAME_PATTERN.test(name)) continue;
+    const info = await stat(join(artifactsRoot, name)).catch(() => null);
+    if (info?.isDirectory()) tools.push(name);
+  }
+  return tools.sort();
+}
+
+function isNodeError(err: unknown): err is NodeJS.ErrnoException {
+  return err instanceof Error && 'code' in err;
+}
 
 program
   .command('prompts')
@@ -44,12 +74,12 @@ program
   });
 
 function parseToolName(value: string): ToolName {
-  if (!(ALL_TOOLS as readonly string[]).includes(value)) {
+  if (!TOOL_NAME_PATTERN.test(value)) {
     throw new InvalidArgumentError(
-      `Unknown tool "${value}". Supported: ${ALL_TOOLS.join(', ')}`,
+      `Tool name "${value}" must be lowercase kebab-case (a-z, 0-9, hyphens; must start with a letter or digit).`,
     );
   }
-  return value as ToolName;
+  return value;
 }
 
 function parseNonNegativeInt(value: string): number {
