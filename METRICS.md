@@ -18,9 +18,9 @@ The composite is a **weighted mean of dimension scores**. Each dimension is itse
 | Code / output quality | 15% | 18% |
 | Visual design quality | 20% | 24% |
 | Security | 10% | 11% |
-| Cost / speed | 15% | excluded (informational) |
+| Cost / speed | 15% | 0% (informational only) |
 
-The research's 15% Cost weight is redistributed proportionally across the four scoring dimensions because Cost is self-reported and informational only — it does not contribute to the composite. The implemented weights normalize to 100%.
+Cost is **informational by design, not folded into the composite.** This is a deliberate choice rather than a temporary measurement gap: (a) tools' credit-system heterogeneity (Lovable messages, Bolt tokens, Replit credits per Lite/Economy/Power mode) makes USD-equivalent normalization a contestable judgment call rather than a measurement, (b) folding cost into the composite invites Goodhart-style optimization where a tool wins the leaderboard by dropping price rather than improving output, (c) the per-dimension leaderboard already exposes cost as a column for cost-conscious readers without polluting the headline. Cost values appear on the leaderboard as a separate column block — readers optimizing for cost-efficiency see TTFR / TTWB / USD-equivalent directly, but those values are never weighted into the composite. The research's 15% Cost weight is redistributed proportionally across the four scoring dimensions; the implemented dimension weights normalize to 100%.
 
 #### Within-dimension scorer weights
 
@@ -122,13 +122,11 @@ Supported action kinds: `evaluate` (run JS via `page.evaluate`), `fill` (type in
 
 ---
 
-### F3 — Spec-based E2E tests (not yet implemented)
+### F3 — Absorbed into F2 setup actions (no separate scorer)
 
-**What it measures:** For the app track — synthesized Playwright tests exercising CRUD paths, auth flows, and data persistence across page reload.
+The original v0.1 design carved out F3 as a separate spec-based-tests scorer for the app track — synthesized Playwright tests exercising CRUD paths, auth flows, and persistence across reload. **In v0.2, F2's setup-actions extension absorbed this scope.** Each F2 acceptance criterion can now carry a `setup: []` array of state-mutating actions (`evaluate` / `fill` / `click` / `press` / `reload` / `waitFor`) that run before the locator is evaluated, which delivers the same outcome with simpler harness mechanics: stateful tests live in the same YAML alongside static-content tests, and authors don't have to choose between two scorer namespaces.
 
-**Research spec:** Pass = all critical criteria + ≥80% nice-to-have. Tests are generated from the prompt + acceptance YAML, human-audited once, then frozen for evaluation.
-
-**Status:** Deferred to app track (v0.2+). Not present in v0.1 which only covers the static landing page track.
+F3 is therefore retired as a separate scorer. The `f3` ID will not be used. F2's within-dim weight (45%) reflects the absorbed F3 scope; the research design's earlier "F2=30% + F3=25%" framing is superseded.
 
 ---
 
@@ -183,6 +181,48 @@ Supported action kinds: `evaluate` (run JS via `page.evaluate`), `fill` (type in
 **Passed:** true only if 100% of constraints are found.
 
 **Gap vs research:** The research recommends capping verbatim constraints at 3–8 per prompt to avoid over-specification that games the metric. No enforcement in v0.1 — prompt authors should follow this guideline manually.
+
+---
+
+### F7 — Auth round-trip (planned v0.3, backend track)
+
+**What it measures:** Whether the deployed backend correctly handles a complete auth lifecycle: sign up → log in → make a change → log out → log in again → confirm the change persists. Catches broken sessions, broken persistence, broken signup forms — failures that F2's single-session checks miss because they never re-authenticate.
+
+**How (planned):** Requires a `signup_credentials` block in `submissions.yaml` (pre-seeded credentials or a documented signup flow) and a `seed_strategy` (`signup_each_run` vs. `pre_seeded`). The harness performs the auth lifecycle via Playwright, then checks state across the log-out / log-back-in boundary. No automated signup for tools that prohibit it (Lovable currently bans it) — sign-up is a documented manual step that produces credentials the harness reads.
+
+**Within-dimension weight (planned):** ~10% within Functional, sourced from F2 narrowing when the backend track ships. F2 contracts from 45% to roughly 30%; the freed weight redistributes across F7, F8, F9.
+
+**N/A handling:** Frontend-only tools (Claude Artifacts, v0 deploys without Supabase) score N/A on F7. Tools that score N/A on F7/F8/S4 are honestly not in the same category as backend-shipping tools — that's the correct signal, not a penalty to game around. Weight redistributes within Functional per §"Renormalization on null scorers".
+
+---
+
+### F8 — Backend persistence across sessions (planned v0.3, backend track)
+
+**What it measures:** Whether state persists to a real backend, not just to localStorage. Create an entity in browser context A → open the same URL in a fresh incognito context B → log in → confirm the entity is there.
+
+**How (planned):** Two browser contexts via Playwright. Context A authenticates, creates an entity, closes. Context B (fresh, no shared cookies/storage) reopens the deployed URL, authenticates with the same credentials, asserts the entity is visible. F8 cleanly distinguishes localStorage-only tools from real-backend tools — a distinction F2 alone can't make even with `setup` reload actions, because reload preserves localStorage.
+
+**Within-dimension weight (planned):** ~10% within Functional, sourced from F2 narrowing.
+
+**Why this complements F7:** F7 confirms auth round-trip works within one browser session. F8 confirms persistence is server-side, not client-side. Together they verify the backend is real and stateful, not just a localStorage-backed simulation.
+
+**N/A handling:** Frontend-only tools score N/A. Tools shipping localStorage-only persistence (the v0.2 reference `todo-localstorage` prompt is one) will fail F8 by design — that's the correct signal.
+
+---
+
+### F9 — Scheduled-job execution (planned v0.3, backend track)
+
+**What it measures:** For prompts whose acceptance YAML requires a working scheduled job (e.g., "expense tracker with weekly summary email," "task app with overdue-task auto-reminder"), whether the tool wired up working cron / scheduled-work and whether that work actually runs and produces the expected side effect.
+
+**How (planned):** Two halves. First, **job exists** — config file present and parseable: Vercel `vercel.json` cron section, Supabase `pg_cron` extension enabled with a scheduled query, Inngest / Trigger.dev function registration, etc. Second, **job executes correctly** — the harness POSTs to a force-trigger endpoint exposed by the prompt's acceptance contract, then verifies the side effect with timestamped fixture data (email-send fixture invoked, status field flipped, retention cleanup ran).
+
+The force-trigger endpoint is mandatory in F9-bearing prompts so the harness doesn't wait real time for verification — prompts must declare a mock-driven trigger path in their acceptance YAML.
+
+**Within-dimension weight (planned):** ~5–10% within Functional on prompts that exercise scheduled work; redistributes within Functional per §"Renormalization on null scorers" on prompts that don't.
+
+**Why this matters:** AI tools handle scheduled work very inconsistently. Some emit cron config they can't actually run (Vercel cron without `vercel.json`, Supabase pg_cron without enabling the extension), some stub it, some hallucinate a service entirely. Currently unscored anywhere in the corpus, and the failure modes are invisible to F2 (which doesn't wait for a cron tick) and F4 (which judges screenshots, not background work).
+
+**N/A handling:** Prompts that don't require scheduled work score N/A — F9 only applies when the prompt's acceptance YAML explicitly declares scheduled-work requirements with a force-trigger endpoint.
 
 ---
 
@@ -347,6 +387,66 @@ Score = passed / total applicable checks.
 **Within-dimension weight (research):** 5% of Code Quality. The research adds this because AI sitebuilders routinely ship React SPAs with zero SEO metadata — a strong discriminator. Penalty only applies when the item is applicable to the prompt/page type.
 
 **Gap vs research:** The research also specifies hreflang tags for multi-language prompts. Not implemented in v0.1.
+
+---
+
+### C10 — Project structure (planned v0.3)
+
+**What it measures:** Deterministic AST + filesystem inspection for framework anti-patterns that catch concrete failure modes the LLM judge (C7) catches inconsistently and ESLint (C1) doesn't catch at all.
+
+**How (planned):** ~6 framework-specific patterns, declared per detected adapter:
+
+- **File-layout sanity** — presence of conventional directories for the detected framework (`app/` or `pages/` for Next.js; `src/components/`, `src/lib/`, `src/hooks/` patterns)
+- **Client/server boundary correctness** in Next.js — no server-only imports (`fs`, `node:*`, server-only env vars) in files marked `'use client'` or descending from one
+- **Db / data-access not called from inside React component render paths** — anti-pattern: `prisma.user.findMany()` directly in a component body
+- **Pages directory free of business logic** — logic lives in `lib/` or route handlers, not page modules
+
+**Within-dimension weight (planned):** ~5–8% within Code Quality, sourced from C7 narrowing. C7's LLM rubric was previously asked to cover architecture by judgment alone; moving project-structure checks to a deterministic backbone lets C7 contract to its core "appropriateness of abstraction boundaries / prop-typing quality / pattern consistency" scope.
+
+**Promotion rationale:** Promoted from 💡 design-only to 📋 v0.3 because it addresses a class of failure (server-only imports in client files, db calls in render paths) that produces real runtime / hydration errors and is invisible to lint.
+
+**Gap vs research:** Patterns are framework-specific — Next.js + Vite-React covered first, other frameworks ship as adapters land.
+
+---
+
+### C11 — Readability (deterministic anchors) (design proposal, not on roadmap)
+
+**Status:** 💡 — research proposal, not yet on the roadmap.
+
+**What it would measure:** Three deterministic sub-checks intended to replace the vague-LLM portion of C7's rubric with anchor-based deterministic scoring:
+
+- **Naming conventions** — component PascalCase, hook `use*` prefix, no single-letter variable names outside loop counters, file naming matches export naming
+- **Function and file length distribution** — median and 90th-percentile function/file length scored against explicit anchors
+- **Comment density and quality** — comment-to-code ratio penalty for both <2% and >25%; detection of filler comments (`// imports`, `// state`, `// render`) via regex
+
+**Why held at 💡:** Promotion to the roadmap requires a research call on whether the signal beyond C1 (lint) plus C7's v0.3 dual-judge upgrade is worth a separate scorer. The dual-judge protocol may close enough of the readability variance gap to make C11 redundant. The decision lands after C7 dual-judge ships and we measure the residual variance.
+
+---
+
+### C12 — Schema design quality (planned v0.3, app track only)
+
+**What it measures:** Deterministic checks on emitted database schemas (Prisma, Drizzle, raw SQL migrations, Supabase schema files). Catches schema rot — the most expensive AI-tool failure mode, because users discover it months in, after lock-in.
+
+**How (planned):** ~12 deterministic patterns, scored as honored / applicable:
+
+- Foreign-key constraints present where joinable
+- NOT NULL on identity / required columns
+- Indexes on FK columns and on columns used in WHERE clauses of generated queries
+- `created_at` / `updated_at` timestamps on entity tables
+- Unique constraints on natural keys (email, slug, username)
+- RLS policies on every user-scoped table when Supabase is the backend
+- Absence of JSON blob columns where a normalized join would be appropriate
+- Consistent on-delete behavior on FK declarations (CASCADE / SET NULL / RESTRICT chosen explicitly, not defaulted)
+
+Adapts ProjDevBench's "system architecture" evaluation axis into deterministic checks rather than an LLM rubric.
+
+**Within-dimension weight (planned):** ~6–8% within Code Quality, sourced from C7 narrowing alongside C10.
+
+**Why this is the highest-value v0.3 code-quality addition:** schema rot is invisible to F7/F8/S4 — those test that the backend *works*, not that the schema is *reasonable*. A tool can pass auth round-trip, pass cross-session persistence, pass RLS probes, and still ship a schema with no foreign keys, no indexes, JSON-blob columns where a join would be appropriate, and inconsistent on-delete behavior. C12 catches that.
+
+**N/A handling:** Tools without a schema file (frontend-only deploys, Claude Artifacts) score N/A — same handling as F7/F8/S4. Patterns will need quarterly refresh as Drizzle / Prisma / Supabase / Convex idioms evolve; budget into the same maintenance cycle as S2 auth-pattern refresh.
+
+**ID note:** Uses `c12` not `c11` to leave `c11` available for the readability proposal above without renumbering if/when both eventually ship.
 
 ---
 
@@ -597,6 +697,65 @@ Either sub-check is N/A when its input is missing (no source ZIP for secrets, or
 
 ---
 
+### S4 — Backend security probes (planned v0.3, backend track)
+
+**What it measures:** Direct API probes against the deployed backend that catch the actual server-side auth-bypass and authorization failures that S2 only catches via *client-side* hints.
+
+**How (planned):** Two probe classes per prompt, declared in the prompt's acceptance YAML:
+
+- **Unauthenticated GET** on a contact-detail / user-data endpoint that should require auth → expect 401/403, fail if 200
+- **Cross-user GET** — authenticate as user A, attempt to read user B's data via direct API call → expect 403, fail if 200 with B's data
+
+Probes are read-only and do not mutate the tool's database. Built on top of the same `signup_credentials` / `seed_strategy` infrastructure as F7 and F8.
+
+**Within-Security weight (planned):** TBD on ship — likely sourced as additive (the security dimension expands rather than reweighting existing scorers), since S1/S2/S3 cover code-pattern and dependency-vuln signals that S4's runtime probes complement rather than replace.
+
+**Why this is the single biggest security signal-quality win in v0.3:** S2 catches code patterns that *suggest* auth is broken (Supabase service-role key in client code, JWT decode without verify, RLS-off schema files committed). S4 catches the actual server-side failure — the canonical "Supabase RLS off, every user can read every other user's data" bug that's invisible from the frontend until someone tries it.
+
+**N/A handling:** Tools that don't ship a backend (Claude Artifacts, frontend-only v0 deploys) score N/A on S4 — same handling as F7/F8. Tools that score N/A on F7/F8/S4 are honestly not in the same category as backend-shipping tools — that's the correct signal, not a penalty to game around.
+
+---
+
+## Corpus-level mechanisms (research proposals, not on roadmap)
+
+These are harness-level rules — not scorers — that the research design proposes for protecting the leaderboard's discriminative signal as the corpus saturates and sustained leaderboard runs accumulate. None are committed to a release; all three are tracked here so they don't get re-debated and to set expectations for the v0.3+ horizon.
+
+### Auto-retirement of saturated prompts
+
+**Status:** 💡 — not on the roadmap.
+
+Any prompt where the **median tool composite score is ≥90 across three consecutive quarterly leaderboard runs** would automatically retire from the corpus and replace with a freshly-authored prompt sampled from the harder end of the difficulty distribution (typically Tier 3, occasionally a new Tier 4 added that quarter).
+
+Retired prompts log to the leaderboard changelog so reproducibility runs against historical versions remain possible. This is the active version of "living corpus" — saturation, not just contamination, triggers retirement.
+
+**Why held:** Requires sustained quarterly leaderboard runs that don't exist yet. Premature for v0.2; revisit after v0.3 has 2+ quarterly refreshes on record.
+
+### Hard Mode subset
+
+**Status:** 💡 — not on the roadmap.
+
+A permanent subset of 10–20 prompts authored such that **the best current tool scores ≤50% on composite**. Anti-saturation safety valve: when the main corpus inevitably saturates (every long-running benchmark does — HumanEval went from "hard" to "solved" in 24 months; SWE-bench needed Verified then Pro to stay informative), Hard Mode is where the ranking actually happens.
+
+Authoring rules:
+- A prompt enters Hard Mode only after the top three tools on the current leaderboard refresh all score ≤50% on it across n=3 runs
+- At least one Hard Mode prompt per main track (one-shot static, one-shot app, iterative static, iterative app)
+- Annual full regeneration; continuous additions when prompts age out (a Hard Mode prompt where the top tool now scores >70% graduates back to Tier 3)
+- Reported as a separate Hard Mode leaderboard column
+
+**Why held:** Same as auto-retirement — requires a baseline of leaderboard data that doesn't exist yet. The pattern is borrowed from GPQA's "designed-at-the-ceiling" approach and SWE-bench's Verified/Pro splits.
+
+### Pairwise Bradley–Terry fallback when scores cluster
+
+**Status:** 💡 — not on the roadmap.
+
+Absolute 0–100 scoring loses discrimination as scores cluster near the ceiling. When the **composite spread across all leaderboard entries falls below 5 points** for two consecutive quarterly runs on a given track, a pairwise ranking layer activates: for each prompt, the rendered outputs of every pair of tools are sent to a dual-MLLM judge with the prompt "which output better satisfies the original prompt?", positions randomized across runs. Wins aggregate into a Bradley–Terry / Elo score (the same framework LMArena uses for human-vote ranking, with closed-form CIs).
+
+When activated, the pairwise score becomes the primary ranking; absolute 0–100 scores remain published alongside as the diagnostic view.
+
+**Why held:** Third line of defense after auto-retirement and Hard Mode — only fires when those two have stopped being enough. Requires sustained leaderboard runs to even know whether the trigger condition (5-point spread across the leaderboard, two consecutive quarters) is approached. Not v0.3 material; deferred until the leaderboard has >12 months of data and saturation is genuinely visible.
+
+---
+
 ## Summary of recommended changes
 
 ### v0.2 priority changes
@@ -610,6 +769,15 @@ Either sub-check is N/A when its input is missing (no source ZIP for secrets, or
 
 | Change | Impact |
 |---|---|
+| **Backend track infrastructure** — `backend_url` / `signup_credentials` / `seed_strategy` in `submissions.yaml` | Enables F7/F8/F9/S4. Submission-flow precondition for the rest of this row block |
+| **F7 auth round-trip** | Tests sign-up → log-in → state-change → log-out → log-in-again persistence. Catches broken sessions, broken signup forms |
+| **F8 backend persistence across sessions** | Two-context test distinguishing localStorage tools from real-backend tools |
+| **F9 scheduled-job execution** | Verifies cron / scheduled work both exists (config present) and runs (force-trigger endpoint produces side effects). Currently unscored anywhere |
+| **S4 backend security probes** | Direct API probes (unauthenticated GET, cross-user GET) catch the canonical "Supabase RLS off" failure that S2 only catches via client-side hints. Single biggest *security* signal-quality win in v0.3 |
+| **C10 project-structure deterministic checks** | Catches framework anti-patterns (server-only imports in `'use client'` files, db calls in render paths) — invisible to lint |
+| **C12 schema-design deterministic checks (app track)** | Catches schema rot (missing FKs, no indexes, RLS off, all-nullable columns) — invisible to F7/F8/S4 which only test the backend works, not whether schema is reasonable |
+| **F2 within-dim weight reflow** when F7/F8/F9 ship (45% → ~30%) | Documented v0.3 weighting change; freed weight redistributes across F7 (~10%), F8 (~10%), F9 (~5–10% on prompts that exercise scheduled work) |
+| **C7 within-dim weight narrows** when C10/C12 ship | Architecture and schema move to deterministic backbones; C7 contracts to its core "abstraction boundaries / prop-typing / pattern consistency" scope |
 | Add second judge from a different model family across V1, F4, and C7 | Eliminates self-preference bias; one rollout covers all three judge scorers |
 | Add disagreement flagging logic (>1 point divergence) for the dual-judge scorers | Surfaces low-confidence judgments for manual review |
 | Add dynamic per-prompt F1 timeout from `baselineBuildSeconds` in prompt YAML | Prevents false-positive timeouts on complex prompts |
@@ -621,12 +789,24 @@ Either sub-check is N/A when its input is missing (no source ZIP for secrets, or
 | `osv.dev` cross-check in S3 | Catches CVEs not yet in npm advisory feed |
 | Quarterly S2 pattern refresh process | Keeps auth anti-patterns current as Supabase/Firebase/Clerk evolve |
 
+### Design proposals not yet on the roadmap
+
+These are research positions tracked here so they don't get re-debated. None are committed to a release.
+
+| Item | Status reason |
+|---|---|
+| **C11 readability (deterministic anchors)** | Held until v0.3 dual-judge upgrade for C7 ships; dual-judge may close enough of the readability variance gap to make C11 redundant |
+| **§"Auto-retirement of saturated prompts"** | Requires sustained quarterly leaderboard runs that don't exist yet. Revisit after v0.3 has 2+ quarterly refreshes on record |
+| **§"Hard Mode subset"** | Same baseline-data prerequisite as auto-retirement |
+| **§"Pairwise Bradley–Terry fallback"** | Third line of defense after auto-retirement and Hard Mode; only fires when those two stop being enough. Deferred until the leaderboard has >12 months of data and saturation is genuinely visible |
+| Prompt-robustness track | Tests how tools handle ambiguous / self-contradictory prompts; novel dimension |
+| Structured self-repair sub-track (LiveCodeBench pattern) | Deterministic test-trace injection as next turn instead of free-form follow-ups; refines an iterative track that's currently deferred |
+
 ### Not planned (v0.1 scope decisions)
 
 | Item | Reason deferred |
 |---|---|
 | Multi-turn iterative track (T4, T5) | Requires session-state management across turns; significant adapter complexity |
-| App track (auth, Supabase, CRUD) | ~2 weeks of plumbing; not needed for static landing page track |
 | V5 animation/interaction polish | Research rates this as noise below top quintile; low ROI |
 | Private prompt split + contamination rotation | Only needed once public scores stabilize |
 | Live tool-drift time series | Operational concern; needs weekly runner infrastructure |

@@ -135,9 +135,14 @@ The driving change: **a Tier 3 CRM prompt that ships with a real backend** (Supa
 
 - 📋 **F7** auth round-trip — sign up → log in → make a change → log out → log in again → change persists. Catches broken sessions, broken persistence, broken signup forms.
 - 📋 **F8** backend persistence across sessions — create entity in browser context A → open same URL in fresh incognito context B → log in → entity is there. Distinguishes localStorage tools from real-backend tools.
+- 📋 **F9** scheduled-job execution — verifies cron / scheduled work both *exists* (config file present and parseable: `vercel.json` cron section, Supabase `pg_cron` enabled, Inngest / Trigger.dev registration) and *runs correctly* (harness POSTs to a force-trigger endpoint declared in the prompt's acceptance YAML, then verifies the side effect with timestamped fixture data). Currently unscored anywhere; AI tools handle scheduled work very inconsistently — broken cron config, stubs, hallucinated services.
 - 📋 **S4** backend security — direct API probes: unauthenticated GET on a contact-detail endpoint, cross-user GET (try to read user B's data as user A). Catches the canonical "Supabase RLS off" failure that S2 only catches via *client-side* hints today.
 
-S4 in particular is the single biggest signal-quality win in this release. S2 catches code patterns that suggest auth is broken; S4 catches the actual server-side failure.
+S4 is the single biggest *security* signal-quality win in v0.3 — S2 catches code patterns that suggest auth is broken; S4 catches the actual server-side failure. F9 closes the previously-unscored cron / scheduled-work gap.
+
+#### F2 within-dim weight reflow when the backend track ships
+
+When F7/F8/F9 land, F2 narrows from its current 45% within-dim share to roughly 30%, with the freed weight redistributed across F7 (~10%), F8 (~10%), and F9 (~5–10% on prompts that exercise scheduled work; redistributes within Functional otherwise per `METRICS.md` § "Renormalization on null scorers"). Documented as a v0.3 weighting change, not a v0.2 break.
 
 #### Discipline
 
@@ -150,6 +155,17 @@ S4 in particular is the single biggest signal-quality win in this release. S2 ca
 - 📋 Cross-family dual-judge protocol for V1, F4, and C7. One rollout serves all three. Mitigates self-preference bias when a tool's backing LLM matches the judge's model family (Lovable uses Claude Sonnet — a Claude-only judge inflates Lovable scores by 5–10pp per the bias literature).
 - 📋 Disagreement flagging logic: when two judges disagree by >1 point on any criterion, flag for manual review or call a third judge.
 - 📋 Krippendorff's α calibration pipeline. Standalone CLI subcommand that takes a JSON file of human ratings + the corresponding judge outputs and computes α. Validates whether the judges actually correlate with human judgment. Requires a one-time pass to gather ~50 human-rated examples per dimension.
+
+### Architecture & schema deterministic checks
+
+Promoted from 💡 design-only to 📋 v0.3 because they address classes of failure that C7's LLM rubric was previously asked to cover by judgment alone — moving them to deterministic backbones is exactly the kind of vague-signal-replacement that LLM-judge work should yield to.
+
+- 📋 **C10** project structure — ~6 framework anti-pattern checks: file-layout sanity, client/server boundary correctness in Next.js (no server-only imports in `'use client'` files or descendants), db / data-access not called from inside React component render paths, pages directory free of business logic. Framework-specific patterns declared per adapter.
+- 📋 **C12** schema-design quality (app track only) — ~12 deterministic patterns over emitted schema files (Prisma, Drizzle, raw SQL, Supabase): foreign-key constraints present, NOT NULL on identity columns, indexes on FK columns, `created_at` / `updated_at` timestamps, unique constraints on natural keys, RLS policies on user-scoped tables for Supabase, absence of JSON blobs where joins would be appropriate, consistent on-delete behavior. Catches schema rot — the most expensive AI-tool failure mode, invisible to F7/F8/S4 which only test the backend *works*, not whether the schema is *reasonable*.
+
+#### C7 within-dim weight narrows when C10/C12 ship
+
+C7's LLM rubric currently spans naming, separation of concerns, component reuse, prop typing, secret handling, *and* implicit architecture/schema judgments. When C10 + C12 land, C7 contracts to its core "abstraction boundaries / prop-typing / pattern consistency" scope and a portion of its within-dim weight transfers to C10 (~5–8%) and C12 (~6–8%, app-track only). Documented as a v0.3 weighting change.
 
 ### Scorer additions and refinements
 
@@ -175,6 +191,29 @@ Items the research design explicitly de-prioritizes or that don't pay back the i
 - 💤 **Multi-turn iterative track (T4, T5)** — would require session-state management across turns and significant adapter complexity
 - 💤 **Private prompt split + contamination rotation** — only needed once public scores stabilize and contamination becomes a real risk
 - 💤 **Live tool-drift time series** — operational concern; needs weekly runner infrastructure that doesn't exist yet
+
+---
+
+## Design proposals not yet on the roadmap
+
+Research positions tracked here so they don't get re-debated. None are committed to a release.
+
+### Scorer-level proposals
+
+- 💡 **C11 readability (deterministic anchors)** — would replace the vague-LLM portion of C7's rubric (naming, function/file-length distributions, comment density and quality) with anchor-based deterministic scoring. Held until v0.3's dual-judge upgrade for C7 ships, since the dual-judge protocol may close enough of the readability variance gap to make C11 redundant. Decision lands after C7 dual-judge measures the residual variance.
+
+### Corpus-level proposals (anti-saturation defenses)
+
+These are harness-level rules — not scorers — that protect the leaderboard's discriminative signal as the corpus saturates. Relevant only after sustained leaderboard runs reveal saturation; no urgency until v0.3 has 2+ quarterly refreshes on record.
+
+- 💡 **Auto-retirement of saturated prompts** — any prompt where median tool composite ≥90 across three consecutive quarterly runs auto-retires and replaces with a freshly-authored prompt from the harder end of the difficulty distribution. Saturated prompts produce no ranking signal but still consume credits.
+- 💡 **Hard Mode subset** — permanent 10–20 prompt subset deliberately authored such that the best current tool scores ≤50% on composite. Anti-saturation safety valve borrowed from GPQA's "designed-at-the-ceiling" approach and SWE-bench's Verified/Pro splits. When the main corpus saturates, Hard Mode is where the ranking actually happens.
+- 💡 **Pairwise Bradley–Terry fallback when scores cluster** — when composite spread across the leaderboard falls below 5 points for two consecutive quarterly runs on a given track, a pairwise dual-MLLM judging layer activates as the primary ranking; absolute 0–100 scores remain published as the diagnostic view. Third line of defense after auto-retirement and Hard Mode; only fires when those two stop being enough.
+
+### Other research positions
+
+- 💡 **Prompt-robustness track** — tests how tools handle ambiguous / self-contradictory prompts; novel dimension.
+- 💡 **Structured self-repair sub-track** (LiveCodeBench pattern) — deterministic test-trace injection as the next turn, instead of free-form follow-ups. Refines the iterative track that's currently deferred.
 
 ---
 
