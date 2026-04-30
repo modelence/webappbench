@@ -11,6 +11,7 @@ import { makeProgressHandler } from './scorers/progress.ts';
 import { scoreSubmission } from './scorers/orchestrate.ts';
 import { scoreAll } from './scorers/score-all.ts';
 import { generateReport } from './report/generate.ts';
+import { generateFixReport, generateFixReportRollup } from './report/fix-report.ts';
 
 const program = new Command();
 
@@ -180,6 +181,35 @@ program
   .action(async (opts: { artifacts: string; out: string }) => {
     const runs = await generateReport(opts.artifacts, opts.out);
     console.log(`Wrote ${opts.out} with ${runs.length} scored run(s)`);
+  });
+
+program
+  .command('fix-report')
+  .description('Generate an actionable Markdown audit of failing scorers (paste into an AI to drive fixes)')
+  .argument('[dir]', 'Submission directory (single-submission mode) — omit when using --all')
+  .option('-o, --out <file>', 'Output file. Defaults to <dir>/fix-report.md or <artifacts>/fix-report.md when --all is set')
+  .option('--all', 'Rollup mode: walk every submission under --artifacts and emit one combined report')
+  .option('-a, --artifacts <dir>', 'Artifacts root (only used with --all)', 'artifacts')
+  .option('-t, --tool <name>', 'Filter rollup to a single tool (only used with --all)')
+  .action(async (
+    dir: string | undefined,
+    opts: { out?: string; all?: boolean; artifacts: string; tool?: string },
+  ) => {
+    if (opts.all) {
+      const result = await generateFixReportRollup({
+        artifactsRoot: opts.artifacts,
+        out: opts.out,
+        tool: opts.tool,
+      });
+      const filterNote = opts.tool ? ` for tool=${opts.tool}` : '';
+      console.log(`Wrote ${result.outFile} covering ${result.submissionCount} submission(s) across ${result.toolCount} tool(s)${filterNote}`);
+      return;
+    }
+    if (!dir) {
+      throw new InvalidArgumentError('fix-report requires <dir> argument or --all flag');
+    }
+    const result = await generateFixReport({ artifactDir: dir, out: opts.out });
+    console.log(`Wrote ${result.outFile} (${result.failingScorers} failing scorer${result.failingScorers === 1 ? '' : 's'})`);
   });
 
 function userReportedTimingFrom(opts: SubmitOptions): UserReportedTiming | undefined {
