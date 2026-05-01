@@ -40,9 +40,9 @@ export async function scoreAll(opts: BatchOptions): Promise<BatchOutcome[]> {
   return outcomes;
 }
 
-async function runOne(
+export async function runOne(
   entry: SubmissionConfigEntry,
-  opts: BatchOptions,
+  opts: Omit<BatchOptions, 'configPath'>,
 ): Promise<BatchOutcome> {
   try {
     const { paths } = await createSubmissionArtifact({

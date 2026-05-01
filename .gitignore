@@ -7,6 +7,7 @@ artifacts/
 .env.local
 .auth/
 leaderboard.html
+leaderboard.json
 submissions.yaml
 coverage/
 playwright-report/

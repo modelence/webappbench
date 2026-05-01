@@ -11,7 +11,8 @@ import { loadCorpus } from './prompts/schema.ts';
 import { computeComposite, formatComposite, formatCompositeBreakdown } from './scorers/composite.ts';
 import { makeProgressHandler } from './scorers/progress.ts';
 import { scoreSubmission } from './scorers/orchestrate.ts';
-import { scoreAll } from './scorers/score-all.ts';
+import { scoreAll, runOne } from './scorers/score-all.ts';
+import { loadConfig } from './core/config.ts';
 import { generateReport } from './report/generate.ts';
 import { generateFixReport, generateFixReportRollup } from './report/fix-report.ts';
 
@@ -153,11 +154,40 @@ program
     console.log('Next: npm run bench -- score', paths.root);
   });
 
+interface ScoreOptions {
+  tool?: ToolName;
+  prompt?: string;
+  run?: number;
+  config: string;
+  corpus: string;
+  artifacts: string;
+  report: boolean;
+  out: string;
+}
+
 program
   .command('score')
-  .description('Run all scorers against a submission directory')
-  .argument('<dir>', 'Submission directory (contains submission.json + prompt.json)')
-  .action(async (dir: string) => {
+  .description('Score a submission. Pass <dir> to score an existing artifact directory, or use --tool to submit + score from submissions.yaml and regenerate the leaderboard.')
+  .argument('[dir]', 'Submission directory (contains submission.json + prompt.json)')
+  .option('-t, --tool <tool>', 'Tool name (reads entry from submissions.yaml)', parseToolName)
+  .option('-p, --prompt <id>', 'Prompt id (required only when the tool has multiple entries)')
+  .option('-r, --run <idx>', 'Run index (required only when the tool has multiple entries)', parseNonNegativeInt)
+  .option('-c, --config <path>', 'Submissions config file', 'submissions.yaml')
+  .option('-d, --corpus <dir>', 'Corpus directory', 'prompts/corpus')
+  .option('-a, --artifacts <dir>', 'Artifacts root', 'artifacts')
+  .option('--no-report', 'Skip regenerating leaderboard.html (only when --tool is used)')
+  .option('-o, --out <file>', 'Leaderboard output file', 'leaderboard.html')
+  .action(async (dir: string | undefined, opts: ScoreOptions) => {
+    if (opts.tool) {
+      if (dir) {
+        throw new InvalidArgumentError('Pass either <dir> or --tool, not both.');
+      }
+      await scoreFromConfig(opts);
+      return;
+    }
+    if (!dir) {
+      throw new InvalidArgumentError('score requires either <dir> or --tool');
+    }
     console.log(`Scoring ${dir}`);
     const { onProgress, flush } = makeProgressHandler();
     const { results } = await scoreSubmission(dir, { onProgress });
@@ -167,6 +197,54 @@ program
     const breakdown = formatCompositeBreakdown(composite);
     if (breakdown) console.log(breakdown);
   });
+
+async function scoreFromConfig(opts: ScoreOptions): Promise<void> {
+  const config = await loadConfig(opts.config);
+  const matches = config.runs.filter((r) => {
+    if (r.tool !== opts.tool) return false;
+    if (opts.prompt !== undefined && r.prompt !== opts.prompt) return false;
+    if (opts.run !== undefined && r.runIdx !== opts.run) return false;
+    return true;
+  });
+  if (matches.length === 0) {
+    const filter = [
+      `tool=${opts.tool}`,
+      opts.prompt !== undefined ? `prompt=${opts.prompt}` : null,
+      opts.run !== undefined ? `run=${opts.run}` : null,
+    ].filter(Boolean).join(', ');
+    throw new InvalidArgumentError(`No entry in ${opts.config} matches ${filter}`);
+  }
+  if (matches.length > 1 && (opts.prompt === undefined || opts.run === undefined)) {
+    const labels = matches.map((m) => `  - prompt=${m.prompt} run=${m.runIdx}`).join('\n');
+    throw new InvalidArgumentError(
+      `Multiple entries match tool=${opts.tool}; disambiguate with --prompt and --run:\n${labels}`,
+    );
+  }
+
+  let okCount = 0;
+  let failCount = 0;
+  for (const entry of matches) {
+    console.log(`\n→ ${entry.tool}/${entry.prompt}/${entry.runIdx}  ${entry.url}`);
+    const outcome = await runOne(entry, {
+      corpusDir: opts.corpus,
+      artifactsRoot: opts.artifacts,
+    });
+    if (outcome.ok) {
+      okCount += 1;
+    } else {
+      failCount += 1;
+      console.error(`  failed: ${outcome.error}`);
+    }
+  }
+  console.log('');
+  console.log(`Finished: ${okCount} scored, ${failCount} failed.`);
+
+  if (opts.report) {
+    const runs = await generateReport(opts.artifacts, opts.out);
+    console.log(`Wrote ${opts.out} with ${runs.length} scored run(s)`);
+  }
+  if (failCount > 0) process.exitCode = 1;
+}
 
 
 interface ScoreAllOptions {

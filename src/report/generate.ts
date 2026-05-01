@@ -19,7 +19,45 @@ export async function generateReport(artifactsRoot: string, outFile: string): Pr
   const runs = await collectRuns(artifactsRoot);
   const html = renderHtml(runs);
   await writeFile(outFile, html, 'utf8');
+  await writeFile(jsonOutPath(outFile), serializeRuns(runs), 'utf8');
   return runs;
+}
+
+function jsonOutPath(htmlOutFile: string): string {
+  return htmlOutFile.endsWith('.html')
+    ? `${htmlOutFile.slice(0, -'.html'.length)}.json`
+    : `${htmlOutFile}.json`;
+}
+
+function serializeRuns(runs: RunSummary[]): string {
+  const payload = {
+    generatedAt: new Date().toISOString(),
+    runs: runs.map((r) => {
+      const composite = computeComposite(r.scores);
+      const trimmedScores: Record<string, Omit<ScorerResult, 'details'>> = {};
+      for (const [id, result] of Object.entries(r.scores)) {
+        const { details: _details, ...rest } = result;
+        trimmedScores[id] = rest;
+      }
+      return {
+        tool: r.tool,
+        promptId: r.promptId,
+        runIdx: r.runIdx,
+        toolVersion: r.toolVersion,
+        submittedAt: r.submittedAt,
+        artifactUrl: r.artifactUrl,
+        hasSource: r.hasSource,
+        composite: composite
+          ? {
+              score: composite.score,
+              dimensions: composite.dimensions,
+            }
+          : null,
+        scores: trimmedScores,
+      };
+    }),
+  };
+  return `${JSON.stringify(payload, null, 2)}\n`;
 }
 
 async function collectRuns(artifactsRoot: string): Promise<RunSummary[]> {
