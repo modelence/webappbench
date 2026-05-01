@@ -95,14 +95,16 @@ export async function runSemgrep(sourceDir: string): Promise<ScannerResult> {
     };
   }
 
-  const findings: ExternalFinding[] = (parsed.results ?? []).map((r) => ({
-    ruleId: `semgrep/${r.check_id}`,
-    label: r.extra?.message?.split('\n')[0]?.slice(0, 120) ?? r.check_id,
-    file: relativizePath(sourceDir, r.path),
-    lineNumber: r.start?.line ?? 0,
-    snippet: redactSnippet(r.extra?.lines ?? ''),
-    scanner: 'semgrep',
-  }));
+  const findings: ExternalFinding[] = (parsed.results ?? [])
+    .map((r) => ({
+      ruleId: `semgrep/${r.check_id}`,
+      label: r.extra?.message?.split('\n')[0]?.slice(0, 120) ?? r.check_id,
+      file: relativizePath(sourceDir, r.path),
+      lineNumber: r.start?.line ?? 0,
+      snippet: redactSnippet(r.extra?.lines ?? ''),
+      scanner: 'semgrep' as const,
+    }))
+    .filter((f) => !isExcludedPath(f.file));
 
   return { available: true, findings };
 }
@@ -161,10 +163,12 @@ export async function runTrufflehog(sourceDir: string): Promise<ScannerResult> {
     const detector = obj.DetectorName ?? 'unknown';
     const file = obj.SourceMetadata?.Data?.Filesystem?.file ?? '';
     const lineNumber = obj.SourceMetadata?.Data?.Filesystem?.line ?? 0;
+    const relFile = relativizePath(sourceDir, file);
+    if (isExcludedPath(relFile)) continue;
     findings.push({
       ruleId: `trufflehog/${detector}${obj.Verified ? '/verified' : ''}`,
       label: `${detector}${obj.Verified ? ' (verified live)' : ''}`,
-      file: relativizePath(sourceDir, file),
+      file: relFile,
       lineNumber,
       snippet: redactSnippet(obj.Raw ?? ''),
       scanner: 'trufflehog',
@@ -172,6 +176,19 @@ export async function runTrufflehog(sourceDir: string): Promise<ScannerResult> {
   }
 
   return { available: true, findings };
+}
+
+// External scanners walk every file in the source tree, including a cloned
+// repo's own .git/ metadata. The built-in regex scan filters these via
+// SKIP_DIRS in s1-secrets; mirror that here for parity. Without this filter,
+// trufflehog frequently reports JWTs from .git/config credential URLs that
+// have nothing to do with the user's code.
+const EXCLUDED_PATH_SEGMENTS = ['node_modules', '.git', 'dist', 'build', '.next', 'out', '.cache'];
+
+function isExcludedPath(relPath: string): boolean {
+  if (!relPath) return false;
+  const segments = relPath.split('/');
+  return segments.some((seg) => EXCLUDED_PATH_SEGMENTS.includes(seg));
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

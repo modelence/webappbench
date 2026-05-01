@@ -73,6 +73,23 @@ export async function runC8(sourceDir: string): Promise<ScorerResult> {
     const { command, args } = installCommand(target.manager);
     const result = await runCommand(command, args, tempProjectDir, INSTALL_TIMEOUT_MS);
 
+    // Manager not on harness PATH is a harness environment issue, not a tool
+    // quality issue — score null so it doesn't unfairly tank the submission.
+    if (managerNotInstalled(result, target.manager)) {
+      return {
+        scorer: 'c8',
+        version: C8_VERSION,
+        passed: null,
+        score: null,
+        details: {
+          manager: target.manager,
+          packageDir: relativePath(sourceDir, target.packageDir),
+          note: `${target.manager} not found on PATH — install it on the harness machine to score this submission`,
+          elapsedMs: Date.now() - start,
+        },
+      };
+    }
+
     const passed = result.code === 0 && !result.timedOut;
     const score = passed ? 1 : 0;
 
@@ -130,7 +147,11 @@ async function findInstallTarget(sourceDir: string): Promise<InstallTarget | nul
 }
 
 async function detectPackageManager(dir: string): Promise<PackageManager> {
+  // pnpm-workspace.yaml is a strong pnpm signal even when the lockfile lives at
+  // the workspace root (or hasn't been generated yet); pin manager to pnpm so
+  // the lockfile presence check below uses pnpm-lock.yaml, not package-lock.json.
   if (await fileExists(join(dir, 'pnpm-lock.yaml'))) return 'pnpm';
+  if (await fileExists(join(dir, 'pnpm-workspace.yaml'))) return 'pnpm';
   if (await fileExists(join(dir, 'yarn.lock'))) return 'yarn';
   return 'npm';
 }
@@ -215,4 +236,13 @@ function summarizeCommandFailure(result: CommandResult): string {
   // Prefer stderr (where npm/pnpm/yarn write actual errors) but fall back to stdout.
   const text = `${result.stderr}\n${result.stdout}`.trim().replace(/\s+/g, ' ');
   return (text || `exit code ${result.code ?? 'unknown'}`).slice(0, 400);
+}
+
+function managerNotInstalled(result: CommandResult, manager: PackageManager): boolean {
+  // node:child_process spawn with a missing binary surfaces ENOENT in stderr
+  // (and exits with null code). Match both signals to avoid false positives
+  // from real install errors that happen to mention ENOENT for a missing
+  // package file inside node_modules.
+  if (result.code !== null) return false;
+  return new RegExp(`spawn ${manager} ENOENT`).test(result.stderr);
 }

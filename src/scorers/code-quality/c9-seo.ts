@@ -117,7 +117,10 @@ async function runCheck(
 ): Promise<SeoCheckOutcome> {
   switch (check) {
     case 'title': {
-      const passed = f.title.length >= 10 && f.title.length <= 70 && !/untitled|document/i.test(f.title);
+      // Reject framework / scaffolder default titles — they technically pass
+      // length checks but signal the tool didn't actually set a real title.
+      const isStubTitle = /^(untitled|document|empty project|vite( app)?|react app|next app|create next app|app|home)$/i.test(f.title.trim());
+      const passed = f.title.length >= 10 && f.title.length <= 70 && !isStubTitle;
       return { check, passed, detail: f.title || 'missing' };
     }
     case 'meta_description': {

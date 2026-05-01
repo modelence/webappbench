@@ -101,6 +101,13 @@ export async function scoreSubmission(
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2)).catch(() => undefined);
       await page.waitForTimeout(500);
       await page.screenshot({ path: join(paths.screenshots, 'mid-scroll.png'), fullPage: false }).catch(() => undefined);
+
+      // Mobile screenshot for V1/F4 judges. V4 also captures a viewport-mobile.png
+      // later via its own contexts, but V4 runs after V1/F4 — so we capture here
+      // first to make sure the judges actually see a mobile view. Uses a temp
+      // mobile context to avoid disturbing the main desktop page state.
+      await captureMobileScreenshot(ctx.browser, ctx.submission.artifactUrl, paths.screenshots);
+
       results['c3'] = await runScorer('c3', () => runC3(ctx));
       results['c9'] = await runScorer('c9', () => runC9(ctx));
       results['f4'] = await runScorer('f4', () => runF4(ctx));
@@ -189,6 +196,27 @@ export async function scoreSubmission(
   await writeJson(join(artifactDir, 'scores.json'), results);
 
   return { artifactDir, results };
+}
+
+async function captureMobileScreenshot(
+  browser: import('@playwright/test').Browser,
+  url: string,
+  screenshotsDir: string,
+): Promise<void> {
+  const ctx = await browser.newContext({ viewport: { width: 360, height: 800 } });
+  const page = await ctx.newPage();
+  try {
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
+    await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
+    await page.screenshot({
+      path: join(screenshotsDir, 'viewport-mobile.png'),
+      fullPage: false,
+    });
+  } catch {
+    // Best-effort — V1/F4 fall back to whatever screenshots are present.
+  } finally {
+    await ctx.close().catch(() => undefined);
+  }
 }
 
 function rebasePaths(paths: ReturnType<typeof artifactPaths>, newRoot: string): void {

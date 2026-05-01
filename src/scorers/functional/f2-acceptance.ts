@@ -157,8 +157,17 @@ async function runSetupStep(page: Page, action: SetupAction): Promise<void> {
   }
 }
 
+// Expose `page`'s locator factories as bare names inside the expression so
+// chained matchers like `.or(getByRole(...))` and `.filter({ has: locator(...) })`
+// resolve against the same page. Without this, the second `getByRole` in
+// `getByRole('button',...).or(getByRole('link',...))` would throw
+// `ReferenceError: getByRole is not defined` at runtime.
+const LOCATOR_FACTORIES = ['getByRole', 'getByText', 'getByLabel', 'getByPlaceholder', 'getByAltText', 'getByTitle', 'getByTestId', 'locator'] as const;
+
 function buildLocator(page: Page, expr: string): Locator {
-  const fn = new Function('page', `return page.${expr};`) as (p: Page) => Locator;
+  const factoryArgs = LOCATOR_FACTORIES.map((name) => `${name} = page.${name}.bind(page)`).join(', ');
+  const body = `const ${factoryArgs}; return page.${expr};`;
+  const fn = new Function('page', body) as (p: Page) => Locator;
   const result = fn(page);
   if (!result || typeof (result as Locator).first !== 'function') {
     throw new Error(`Invalid locator expression: ${expr}`);

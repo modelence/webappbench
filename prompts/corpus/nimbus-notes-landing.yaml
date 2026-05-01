@@ -12,7 +12,7 @@ must_have:
     locator: "getByRole('heading', { level: 1 })"
     assert: "toBeVisible"
   - id: cta_above_fold
-    locator: "getByRole('button', { name: /get started/i })"
+    locator: "getByRole('button', { name: /get started/i }).or(getByRole('link', { name: /get started/i }))"
     assert: "toBeVisible"
     custom: "boundingBox.y < 800"
   - id: sticky_nav
