@@ -1,6 +1,8 @@
-# @modelence/benchmark
+# WebAppBench
 
 Reproducible open-source benchmark for AI sitebuilder products — Lovable, Replit Agent, Same.new, v0, bolt.new, Claude Artifacts.
+
+Live leaderboard and rankings: <https://WebAppBench.com>
 
 ## What this repo does
 
