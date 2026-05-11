@@ -109,11 +109,11 @@ Declare all (tool, prompt, url) triples in one place, then run a single command.
    - (Optional) record wall-clock timing and credits in the same entry.
 3. Score everything and generate the leaderboard:
    ```bash
-   npm run bench -- score-all
+   npm run bench -- score
    open leaderboard.html
    ```
 
-`score-all` is idempotent. Re-running overwrites scores for URLs still in the config. Add new entries and re-run; remove entries to stop scoring them (existing artifact dirs stay until you `rm -rf artifacts`).
+`score` (with no tool argument) is idempotent. Re-running overwrites scores for URLs still in the config. Add new entries and re-run; remove entries to stop scoring them (existing artifact dirs stay until you `rm -rf artifacts`). To rescore a single tool, pass its name: `npm run bench -- score lovable`.
 
 ### Ad-hoc
 
@@ -121,8 +121,8 @@ For one-offs:
 
 ```bash
 npm run bench -- submit --tool lovable --prompt nimbus-notes-landing --url https://<preview>.lovable.app/
-npm run bench -- score artifacts/lovable/nimbus-notes-landing/0
-npm run bench -- report
+npm run bench -- rescore artifacts/lovable/nimbus-notes-landing/0
+npm run bench -- leaderboard
 ```
 
 ### CLI reference
@@ -132,14 +132,14 @@ npm run bench -- tools                                            # List support
 npm run bench -- prompts                                          # List corpus prompts (validates YAML)
 npm run bench -- submit --tool <t> --prompt <id> --url <url>      # Create a single submission
                        [--source path/to/source.zip]              #   (optional) attach source ZIP for source-only scorers
-npm run bench -- score <submission-dir>                           # Run all scorers on an existing submission
-npm run bench -- score-all [--config submissions.yaml]            # Batch: create + score every entry, then regenerate report
-npm run bench -- report [--artifacts artifacts] [--out leaderboard.html]
-npm run bench -- fix-report <submission-dir> [--out file]         # AI-actionable Markdown audit of failing scorers
-npm run bench -- fix-report --all [--tool <name>] [--out file]    #   rollup mode: every submission under artifacts/, optionally filtered by tool
+npm run bench -- score [tool] [--prompt <id>] [--run <idx>]       # Submit + score submissions.yaml entries (all by default; one tool if given), then regenerate the leaderboard
+npm run bench -- rescore <submission-dir>                         # Re-run all scorers on an existing submission directory in place
+npm run bench -- leaderboard [--artifacts artifacts] [--out leaderboard.html]
+npm run bench -- audit <submission-dir> [--out file]              # AI-actionable Markdown audit of failing scorers
+npm run bench -- audit --all [--tool <name>] [--out file]         #   rollup mode: every submission under artifacts/, optionally filtered by tool
 ```
 
-When `score-all` finishes, the console prints the composite score plus a per-dimension breakdown:
+When `score` finishes, the console prints the composite score plus a per-dimension breakdown:
 
 ```
 Score: 73.4 / 100  ▓  (16 scorers)
@@ -149,13 +149,13 @@ Score: 73.4 / 100  ▓  (16 scorers)
     Security      88.0 / 100   weight 11%   (s1 s2 s3)
 ```
 
-### Driving fixes with `fix-report`
+### Driving fixes with `audit`
 
-After scoring, run `fix-report` to get a Markdown audit you can paste into an AI to drive concrete fixes:
+After scoring, run `audit` to get a Markdown audit you can paste into an AI to drive concrete fixes:
 
 ```bash
-npm run bench -- fix-report artifacts/lovable/nimbus-notes-landing/0
-# Wrote artifacts/lovable/nimbus-notes-landing/0/fix-report.md (4 failing scorers)
+npm run bench -- audit artifacts/lovable/nimbus-notes-landing/0
+# Wrote artifacts/lovable/nimbus-notes-landing/0/audit.md (4 failing scorers)
 ```
 
 The report opens with the composite score + per-dimension breakdown, then enumerates failing scorers in **composite-contribution order** (highest-leverage fixes first). Each failure section contains the concrete data an AI needs to action: F2 surfaces failed acceptance-criterion ids with their original locator/assertion; F6 lists missing verbatim strings; C3 enumerates axe rule ids with selectors; V1/F4/C7 surface judge rationales for criteria scoring ≤3/5; S1/S2/S3 list rule ids, severities, and source line numbers with 7 lines of context (3 before + matched line + 3 after) extracted from the source ZIP. Passing and not-applicable scorers are omitted entirely.
@@ -163,7 +163,7 @@ The report opens with the composite score + per-dimension breakdown, then enumer
 For multi-submission audits across one tool — useful when you want to spot consistent failure patterns across runs:
 
 ```bash
-npm run bench -- fix-report --all --tool lovable --out lovable-fixes.md
+npm run bench -- audit --all --tool lovable --out lovable-fixes.md
 ```
 
 Rollup mode adds a per-tool failure-frequency table at the top so you can prioritize systemic fixes (e.g. "C8 install fails 100% of the time → fix the lockfile generation in Lovable's export step before fixing per-submission F2 failures").

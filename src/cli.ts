@@ -11,7 +11,7 @@ import { loadCorpus } from './prompts/schema.ts';
 import { computeComposite, formatComposite, formatCompositeBreakdown } from './scorers/composite.ts';
 import { makeProgressHandler } from './scorers/progress.ts';
 import { scoreSubmission } from './scorers/orchestrate.ts';
-import { scoreAll, runOne } from './scorers/score-all.ts';
+import { runOne } from './scorers/score-all.ts';
 import { loadConfig } from './core/config.ts';
 import { generateReport } from './report/generate.ts';
 import { generateFixReport, generateFixReportRollup } from './report/fix-report.ts';
@@ -151,43 +151,42 @@ program
     console.log(`  prompt        ${submission.promptId} (tier ${prompt.tier})`);
     console.log(`  artifactUrl   ${submission.artifactUrl}`);
     console.log('');
-    console.log('Next: npm run bench -- score', paths.root);
+    console.log('Next: npm run bench -- rescore', paths.root);
   });
 
 interface ScoreOptions {
-  tool?: ToolName;
   prompt?: string;
   run?: number;
   config: string;
   corpus: string;
   artifacts: string;
-  report: boolean;
+  leaderboard: boolean;
   out: string;
 }
 
 program
   .command('score')
-  .description('Score a submission. Pass <dir> to score an existing artifact directory, or use --tool to submit + score from submissions.yaml and regenerate the leaderboard.')
-  .argument('[dir]', 'Submission directory (contains submission.json + prompt.json)')
-  .option('-t, --tool <tool>', 'Tool name (reads entry from submissions.yaml)', parseToolName)
-  .option('-p, --prompt <id>', 'Prompt id (required only when the tool has multiple entries)')
-  .option('-r, --run <idx>', 'Run index (required only when the tool has multiple entries)', parseNonNegativeInt)
+  .description('Submit + score entries from submissions.yaml, then regenerate the leaderboard. Pass <tool> to filter to one tool; omit to score every entry. URL and source are read from the config.')
+  .argument('[tool]', 'Tool name (must have at least one entry in submissions.yaml). Omit to score every entry.', parseToolName)
+  .option('-p, --prompt <id>', 'Filter to a single prompt id (requires <tool>)')
+  .option('-r, --run <idx>', 'Filter to a single run index (requires <tool>)', parseNonNegativeInt)
   .option('-c, --config <path>', 'Submissions config file', 'submissions.yaml')
   .option('-d, --corpus <dir>', 'Corpus directory', 'prompts/corpus')
   .option('-a, --artifacts <dir>', 'Artifacts root', 'artifacts')
-  .option('--no-report', 'Skip regenerating leaderboard.html (only when --tool is used)')
+  .option('--no-leaderboard', 'Skip regenerating leaderboard.html')
   .option('-o, --out <file>', 'Leaderboard output file', 'leaderboard.html')
-  .action(async (dir: string | undefined, opts: ScoreOptions) => {
-    if (opts.tool) {
-      if (dir) {
-        throw new InvalidArgumentError('Pass either <dir> or --tool, not both.');
-      }
-      await scoreFromConfig(opts);
-      return;
+  .action(async (tool: ToolName | undefined, opts: ScoreOptions) => {
+    if (tool === undefined && (opts.prompt !== undefined || opts.run !== undefined)) {
+      throw new InvalidArgumentError('--prompt and --run require a <tool> argument');
     }
-    if (!dir) {
-      throw new InvalidArgumentError('score requires either <dir> or --tool');
-    }
+    await scoreFromConfig(tool, opts);
+  });
+
+program
+  .command('rescore')
+  .description('Re-score an existing submission artifact directory in place (does not read submissions.yaml)')
+  .argument('<dir>', 'Submission directory (contains submission.json + prompt.json)')
+  .action(async (dir: string) => {
     console.log(`Scoring ${dir}`);
     const { onProgress, flush } = makeProgressHandler();
     const { results } = await scoreSubmission(dir, { onProgress });
@@ -198,27 +197,21 @@ program
     if (breakdown) console.log(breakdown);
   });
 
-async function scoreFromConfig(opts: ScoreOptions): Promise<void> {
+async function scoreFromConfig(tool: ToolName | undefined, opts: ScoreOptions): Promise<void> {
   const config = await loadConfig(opts.config);
   const matches = config.runs.filter((r) => {
-    if (r.tool !== opts.tool) return false;
+    if (tool !== undefined && r.tool !== tool) return false;
     if (opts.prompt !== undefined && r.prompt !== opts.prompt) return false;
     if (opts.run !== undefined && r.runIdx !== opts.run) return false;
     return true;
   });
   if (matches.length === 0) {
     const filter = [
-      `tool=${opts.tool}`,
+      tool !== undefined ? `tool=${tool}` : null,
       opts.prompt !== undefined ? `prompt=${opts.prompt}` : null,
       opts.run !== undefined ? `run=${opts.run}` : null,
-    ].filter(Boolean).join(', ');
+    ].filter(Boolean).join(', ') || '(no filter)';
     throw new InvalidArgumentError(`No entry in ${opts.config} matches ${filter}`);
-  }
-  if (matches.length > 1 && (opts.prompt === undefined || opts.run === undefined)) {
-    const labels = matches.map((m) => `  - prompt=${m.prompt} run=${m.runIdx}`).join('\n');
-    throw new InvalidArgumentError(
-      `Multiple entries match tool=${opts.tool}; disambiguate with --prompt and --run:\n${labels}`,
-    );
   }
 
   let okCount = 0;
@@ -239,50 +232,15 @@ async function scoreFromConfig(opts: ScoreOptions): Promise<void> {
   console.log('');
   console.log(`Finished: ${okCount} scored, ${failCount} failed.`);
 
-  if (opts.report) {
+  if (opts.leaderboard) {
     const runs = await generateReport(opts.artifacts, opts.out);
     console.log(`Wrote ${opts.out} with ${runs.length} scored run(s)`);
   }
   if (failCount > 0) process.exitCode = 1;
 }
 
-
-interface ScoreAllOptions {
-  config: string;
-  corpus: string;
-  artifacts: string;
-  report: boolean;
-  out: string;
-}
-
 program
-  .command('score-all')
-  .description('Submit + score every entry in submissions.yaml, then generate the leaderboard')
-  .option('-c, --config <path>', 'Submissions config file', 'submissions.yaml')
-  .option('-d, --corpus <dir>', 'Corpus directory', 'prompts/corpus')
-  .option('-a, --artifacts <dir>', 'Artifacts root', 'artifacts')
-  .option('--no-report', 'Skip generating leaderboard.html after scoring')
-  .option('-o, --out <file>', 'Leaderboard output file', 'leaderboard.html')
-  .action(async (opts: ScoreAllOptions) => {
-    const outcomes = await scoreAll({
-      configPath: opts.config,
-      corpusDir: opts.corpus,
-      artifactsRoot: opts.artifacts,
-    });
-    const ok = outcomes.filter((o) => o.ok).length;
-    const failed = outcomes.length - ok;
-    console.log('');
-    console.log(`Finished: ${ok} scored, ${failed} failed.`);
-
-    if (opts.report) {
-      const runs = await generateReport(opts.artifacts, opts.out);
-      console.log(`Wrote ${opts.out} with ${runs.length} scored run(s)`);
-    }
-    if (failed > 0) process.exitCode = 1;
-  });
-
-program
-  .command('report')
+  .command('leaderboard')
   .description('Generate leaderboard.html from scored submissions')
   .option('-a, --artifacts <dir>', 'Artifacts root', 'artifacts')
   .option('-o, --out <file>', 'Output file', 'leaderboard.html')
@@ -292,11 +250,11 @@ program
   });
 
 program
-  .command('fix-report')
+  .command('audit')
   .description('Generate an actionable Markdown audit of failing scorers (paste into an AI to drive fixes)')
   .argument('[dir]', 'Submission directory (single-submission mode) — omit when using --all')
-  .option('-o, --out <file>', 'Output file. Defaults to <dir>/fix-report.md or <artifacts>/fix-report.md when --all is set')
-  .option('--all', 'Rollup mode: walk every submission under --artifacts and emit one combined report')
+  .option('-o, --out <file>', 'Output file. Defaults to <dir>/audit.md or <artifacts>/audit.md when --all is set')
+  .option('--all', 'Rollup mode: walk every submission under --artifacts and emit one combined audit')
   .option('-a, --artifacts <dir>', 'Artifacts root (only used with --all)', 'artifacts')
   .option('-t, --tool <name>', 'Filter rollup to a single tool (only used with --all)')
   .action(async (
@@ -314,7 +272,7 @@ program
       return;
     }
     if (!dir) {
-      throw new InvalidArgumentError('fix-report requires <dir> argument or --all flag');
+      throw new InvalidArgumentError('audit requires <dir> argument or --all flag');
     }
     const result = await generateFixReport({ artifactDir: dir, out: opts.out });
     console.log(`Wrote ${result.outFile} (${result.failingScorers} failing scorer${result.failingScorers === 1 ? '' : 's'})`);

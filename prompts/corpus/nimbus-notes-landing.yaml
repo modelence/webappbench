@@ -20,10 +20,11 @@ must_have:
     assert: "toBeVisible"
 
 should_have:
-  # At least 3 subheadings (h2s) — proxy for "three-feature grid" without
-  # requiring a specific markup style that varies per tool.
+  # At least 3 subheadings (h2 or h3) — proxy for "three-feature grid" without
+  # requiring a specific markup style that varies per tool. Accepts both flat
+  # h2-per-feature and nested "Features" h2 + h3-per-feature layouts.
   - id: feature_subheadings
-    locator: "locator('h2')"
+    locator: "locator('h2, h3')"
     assert: "toHaveCountAtLeast(3)"
   # At least 3 block-quote style elements — proxy for "testimonials (3 placeholders)".
   - id: testimonials_present

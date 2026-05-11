@@ -11,14 +11,14 @@ import type { ScorerResult } from '../scorers/types.ts';
 export interface FixReportOptions {
   // Path to a single submission directory (contains submission.json + scores.json).
   artifactDir: string;
-  // Optional output path. Defaults to <artifactDir>/fix-report.md.
+  // Optional output path. Defaults to <artifactDir>/audit.md.
   out?: string;
 }
 
 export interface FixReportRollupOptions {
   // Path to the artifacts root (contains tool/prompt/run subdirs).
   artifactsRoot: string;
-  // Optional output path. Defaults to <artifactsRoot>/fix-report.md.
+  // Optional output path. Defaults to <artifactsRoot>/audit.md.
   out?: string;
   // Optional tool filter — only include this tool's submissions in the rollup.
   tool?: string;
@@ -32,7 +32,7 @@ export async function generateFixReport(opts: FixReportOptions): Promise<{ outFi
   const sourceDir = existsSync(join(opts.artifactDir, 'source')) ? join(opts.artifactDir, 'source') : null;
 
   const md = await renderSubmissionReport(submission, prompt, scores, sourceDir);
-  const outFile = opts.out ?? join(opts.artifactDir, 'fix-report.md');
+  const outFile = opts.out ?? join(opts.artifactDir, 'audit.md');
   await writeFile(outFile, md, 'utf8');
 
   const failingScorers = countFailures(scores);
@@ -62,7 +62,7 @@ export async function generateFixReportRollup(opts: FixReportRollupOptions): Pro
     }
   }
 
-  const outFile = opts.out ?? join(opts.artifactsRoot, 'fix-report.md');
+  const outFile = opts.out ?? join(opts.artifactsRoot, 'audit.md');
   await writeFile(outFile, sections.join('\n'), 'utf8');
   return { outFile, submissionCount: submissions.length, toolCount };
 }
