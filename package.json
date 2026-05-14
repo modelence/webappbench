@@ -12,12 +12,35 @@
   "bugs": {
     "url": "https://github.com/modelence/webappbench/issues"
   },
+  "keywords": [
+    "benchmark",
+    "ai",
+    "sitebuilder",
+    "lighthouse",
+    "eslint",
+    "accessibility",
+    "webapp"
+  ],
   "engines": {
     "node": ">=20.0.0"
   },
+  "bin": {
+    "webappbench": "dist/cli.js"
+  },
+  "main": "dist/cli.js",
+  "files": [
+    "dist",
+    "prompts",
+    "submissions.example.yaml",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "scripts": {
     "typecheck": "tsc",
-    "bench": "tsx src/cli.ts"
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "bench": "tsx src/cli.ts",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.11.2",

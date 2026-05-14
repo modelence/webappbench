@@ -1,5 +1,7 @@
-import { readdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+#!/usr/bin/env node
+import { readdir, readFile, stat } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Command, InvalidArgumentError } from 'commander';
 import { loadDotenv } from './core/env.ts';
 
@@ -16,12 +18,29 @@ import { loadConfig } from './core/config.ts';
 import { generateReport } from './report/generate.ts';
 import { generateFixReport, generateFixReportRollup } from './report/fix-report.ts';
 
+async function readPackageVersion(): Promise<string> {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const candidates = [join(here, '..', 'package.json'), join(here, '..', '..', 'package.json')];
+  for (const candidate of candidates) {
+    try {
+      const raw = await readFile(candidate, 'utf8');
+      const parsed = JSON.parse(raw) as { name?: string; version?: string };
+      if (parsed.name === 'webappbench' && typeof parsed.version === 'string') {
+        return parsed.version;
+      }
+    } catch {
+      // try next
+    }
+  }
+  return '0.0.0';
+}
+
 const program = new Command();
 
 program
-  .name('benchmark')
+  .name('webappbench')
   .description('Open-source benchmark for AI sitebuilder products')
-  .version('0.1.0');
+  .version(await readPackageVersion());
 
 program
   .command('tools')
