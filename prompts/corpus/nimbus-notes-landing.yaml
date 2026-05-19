@@ -26,9 +26,11 @@ should_have:
   - id: feature_subheadings
     locator: "locator('h2, h3')"
     assert: "toHaveCountAtLeast(3)"
-  # At least 3 block-quote style elements — proxy for "testimonials (3 placeholders)".
+  # At least 3 testimonial-style elements — proxy for "testimonials (3 placeholders)".
+  # Accepts both semantic <blockquote>/<figure> markup and the more common
+  # styled-div card pattern (id/class/data-* containing "testimonial").
   - id: testimonials_present
-    locator: "locator('blockquote, [role=\"blockquote\"]')"
+    locator: "locator('blockquote, [role=\"blockquote\"], figure, [id*=\"testimonial\" i], [class*=\"testimonial\" i], [data-testid*=\"testimonial\" i]')"
     assert: "toHaveCountAtLeast(3)"
 
 verbatim_constraints:

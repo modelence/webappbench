@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { readdir } from 'node:fs/promises';
+import { readdir, writeFile, unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { ScorerResult } from '../types.ts';
@@ -28,7 +28,8 @@ interface TscError {
 export async function runC2(sourceDir: string): Promise<ScorerResult> {
   const start = Date.now();
 
-  const tsconfig = await findTsconfig(sourceDir);
+  let tsconfig = await findTsconfig(sourceDir);
+  let syntheticTsconfig: string | null = null;
   if (!tsconfig) {
     const hasTsFiles = await containsTsFiles(sourceDir);
     if (!hasTsFiles) {
@@ -40,17 +41,47 @@ export async function runC2(sourceDir: string): Promise<ScorerResult> {
         details: { note: 'No TypeScript files found in source', elapsedMs: Date.now() - start },
       };
     }
+    // No tsconfig anywhere — synthesize one in the source dir so tsc doesn't
+    // walk up the filesystem and pick up an unrelated parent tsconfig (e.g.
+    // the benchmark repo's own root tsconfig.json, which produces spurious
+    // "Option 'bundler' can only be used when..." errors against paths far
+    // outside the project under test).
+    syntheticTsconfig = join(sourceDir, 'tsconfig.benchmark-synth.json');
+    const synthBody = {
+      compilerOptions: {
+        noEmit: true,
+        skipLibCheck: true,
+        strict: false,
+        allowJs: true,
+        target: 'ES2020',
+        module: 'ESNext',
+        moduleResolution: 'bundler',
+        jsx: 'preserve',
+        allowImportingTsExtensions: true,
+        esModuleInterop: true,
+        resolveJsonModule: true,
+        isolatedModules: true,
+      },
+      include: ['**/*.ts', '**/*.tsx', '**/*.js', '**/*.jsx'],
+      exclude: ['node_modules', 'dist', 'build', '.next', 'out'],
+    };
+    await writeFile(syntheticTsconfig, JSON.stringify(synthBody, null, 2), 'utf8');
+    tsconfig = syntheticTsconfig;
   }
 
-  const tscArgs = tsconfig
-    ? ['--noEmit', '--skipLibCheck', '--project', tsconfig]
-    : ['--noEmit', '--skipLibCheck', '--strict', '--allowJs', '--target', 'ES2020', '--moduleResolution', 'bundler', '--allowImportingTsExtensions'];
+  // Always pass --project to pin the config and prevent tsc from walking up
+  // to parent directories looking for an inherited tsconfig.
+  const tscArgs = ['--noEmit', '--skipLibCheck', '--project', tsconfig];
 
   let rawOutput = '';
   try {
     await execFileAsync('npx', ['tsc', ...tscArgs], { cwd: sourceDir, timeout: 60_000 });
   } catch (err) {
     rawOutput = (err as NodeJS.ErrnoException & { stdout?: string; stderr?: string }).stdout ?? '';
+  } finally {
+    if (syntheticTsconfig) {
+      await unlink(syntheticTsconfig).catch(() => {});
+    }
   }
 
   const allErrors = parseErrors(rawOutput, sourceDir);

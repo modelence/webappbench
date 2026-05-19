@@ -169,9 +169,16 @@ const AUTH_PATTERNS: AuthPattern[] = [
     clientSideOnly: true,
     exts: SOURCE_EXTS,
     // Generic: any env var whose name contains SECRET/KEY/TOKEN used in client code.
-    // Excludes NEXT_PUBLIC_ and VITE_ prefixed vars which are intentionally public.
+    // Excludes framework-conventional public prefixes:
+    //   - NEXT_PUBLIC_ (Next.js)
+    //   - VITE_ (Vite)
+    //   - EXPO_PUBLIC_ (Expo / React Native)
+    //   - PUBLIC_ (SvelteKit/Astro)
+    //   - REACT_APP_ (Create React App)
+    //   - NUXT_PUBLIC_ (Nuxt)
+    // These are intentionally exposed to the client by the bundler.
     match: (line) =>
-      /process\.env\.(?!NEXT_PUBLIC_|VITE_)[A-Z_]*(?:SECRET|_KEY|_TOKEN)[A-Z_]*/.test(line),
+      /process\.env\.(?!NEXT_PUBLIC_|VITE_|EXPO_PUBLIC_|PUBLIC_|REACT_APP_|NUXT_PUBLIC_)[A-Z_]*(?:SECRET|_KEY|_TOKEN)[A-Z_]*/.test(line),
   },
 
   // ── Auth bypass patterns ──────────────────────────────────────────────────
@@ -217,9 +224,62 @@ const AUTH_PATTERNS: AuthPattern[] = [
   },
 ];
 
+// Path patterns that unambiguously indicate server-only execution.
+// These take priority over CLIENT_PATH_SEGMENTS — e.g. `app/api/route.ts`
+// lives under `app/` but is server-side in Next.js.
+const SERVER_PATH_SEGMENTS = new Set(['server', 'backend', 'api']);
+
+function isServerSidePath(filePath: string): boolean {
+  const normalized = filePath.toLowerCase().replace(/\\/g, '/');
+  const segments = normalized.split('/');
+  // Next.js / Remix file conventions.
+  const basename = segments[segments.length - 1] ?? '';
+  if (/^route\.(ts|tsx|js|mjs|cjs)$/.test(basename)) return true;
+  if (/\.server\.(ts|tsx|js|mjs|cjs)$/.test(basename)) return true;
+  // Next.js API routes — `pages/api/**` (Pages Router) and `app/**/api/**`
+  // (App Router) are always server-side.
+  if (/(^|\/)pages\/api\//.test(normalized)) return true;
+  if (/(^|\/)app\/.*\/api\//.test(normalized) || /(^|\/)app\/api\//.test(normalized)) return true;
+  // Conventional server-only directory names.
+  if (segments.some((seg) => SERVER_PATH_SEGMENTS.has(seg))) return true;
+  return false;
+}
+
 function isClientSidePath(filePath: string): boolean {
-  const segments = filePath.toLowerCase().split(/[\\/]/);
+  if (isServerSidePath(filePath)) return false;
+  const segments = filePath.toLowerCase().replace(/\\/g, '/').split('/');
   return segments.some((seg) => CLIENT_PATH_SEGMENTS.has(seg));
+}
+
+// Heuristic: a file beginning with the `'use server'` directive is server-only.
+// Checked against file content rather than path so it works for App Router
+// Server Actions placed inside `components/`, `lib/`, etc.
+function hasUseServerDirective(text: string): boolean {
+  // Match within the first ~200 chars to avoid false hits in string literals.
+  const head = text.slice(0, 200);
+  return /^\s*(?:\/\/[^\n]*\n|\/\*[\s\S]*?\*\/\s*)*['"]use server['"]/.test(head);
+}
+
+// Files importing known server-only modules can't run in the browser. This
+// catches cases where the path looks client-side (e.g. `src/auth/create.js`)
+// but the imports prove otherwise — common for auth/middleware glue code.
+const SERVER_ONLY_IMPORTS = [
+  /from\s+['"]hono(?:\/[^'"]*)?['"]/,
+  /from\s+['"]next\/server['"]/,
+  /from\s+['"]next\/headers['"]/,
+  /from\s+['"]@auth\/core(?:\/[^'"]*)?['"]/,
+  /from\s+['"]next-auth(?:\/[^'"]*)?['"]/,
+  /from\s+['"]express['"]/,
+  /from\s+['"]fastify['"]/,
+  /from\s+['"]node:[a-z]+['"]/,
+  /require\(['"]node:[a-z]+['"]\)/,
+];
+
+function importsServerOnlyModule(text: string): boolean {
+  // Only scan the top of the file for imports — keeps the check cheap and
+  // avoids matching strings buried in code.
+  const head = text.slice(0, 4000);
+  return SERVER_ONLY_IMPORTS.some((re) => re.test(head));
 }
 
 export async function runS2(sourceDir: string): Promise<ScorerResult> {
@@ -229,11 +289,18 @@ export async function runS2(sourceDir: string): Promise<ScorerResult> {
 
   for (const file of files) {
     const ext = extname(file).toLowerCase() as `.${string}`;
-    const isClient = isClientSidePath(file);
     const relPath = relative(sourceDir, file);
 
     const text = await readFile(file, 'utf8').catch(() => null);
     if (!text) continue;
+    // Path-based classification, plus content-based override: any file with a
+    // top-level `'use server'` directive or imports of known server-only
+    // modules is server-side regardless of where it lives (Next.js Server
+    // Actions and auth glue code can be co-located in client dirs).
+    const isClient =
+      isClientSidePath(file) &&
+      !hasUseServerDirective(text) &&
+      !importsServerOnlyModule(text);
     const lines = text.split('\n');
 
     for (const pattern of AUTH_PATTERNS) {
