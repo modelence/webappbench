@@ -6,7 +6,7 @@ import { writeJson } from '../../core/artifact.ts';
 import type { ChecklistConfig, ChecklistItem } from '../../core/types.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
 
-export const F4_VERSION = '0.2.0';
+export const F4_VERSION = '0.3.0';
 
 // Functional-intent criteria. Distinct from V1 (visual quality) — these ask whether
 // the page actually does what the prompt asked for, beyond what F2's deterministic
@@ -30,7 +30,21 @@ interface JudgeOutput {
   overall_notes?: string;
 }
 
-const SCREENSHOT_NAMES = ['initial', 'viewport-mobile', 'mid-scroll'] as const;
+interface ScreenshotEntry {
+  name: string;
+  caption: string;
+}
+
+// Order matters: the judge reads them in this order alongside the caption text.
+// scrolled-viewport is the canonical sticky-evidence image — the viewport is
+// scrolled 800px down, so any element rendered at the top of this image is
+// proven sticky/fixed (and any element absent from the top has scrolled away).
+const SCREENSHOTS: ScreenshotEntry[] = [
+  { name: 'initial', caption: 'Full-page screenshot at the top of the document (scroll = 0).' },
+  { name: 'viewport-mobile', caption: 'Viewport-sized capture at mobile width (360x800).' },
+  { name: 'scrolled-viewport', caption: 'Viewport-sized capture AFTER scrolling 800px down. Any element visible at the top of this image is sticky or fixed; any element described in the prompt as "sticky" but absent from the top here is NOT sticky.' },
+  { name: 'mid-scroll', caption: 'Viewport-sized capture scrolled to roughly the middle of the page.' },
+];
 
 const SYSTEM_PROMPT = `You are evaluating whether an AI-generated webpage satisfies the FUNCTIONAL intent of the user's prompt.
 
@@ -57,7 +71,7 @@ Be calibrated: a prompt that asks for a "landing page with hero, three features,
 export async function runF4(ctx: ScorerContext): Promise<ScorerResult> {
   const start = Date.now();
 
-  const screenshots = await loadScreenshots(ctx.paths.screenshots);
+  const screenshots = await loadCaptionedScreenshots(ctx.paths.screenshots);
   if (screenshots.length === 0) {
     return {
       scorer: 'f4',
@@ -112,10 +126,13 @@ If any feature explicitly named in the prompt is absent from the screenshots, li
 Respond with JSON only.`;
 
   try {
-    const imageContent = screenshots.map((b64) => ({
-      type: 'image_url' as const,
-      image_url: { url: `data:image/png;base64,${b64}`, detail: 'low' as const },
-    }));
+    const imageContent = screenshots.flatMap((s) => [
+      { type: 'text' as const, text: `Screenshot: ${s.name}. ${s.caption}` },
+      {
+        type: 'image_url' as const,
+        image_url: { url: `data:image/png;base64,${s.base64}`, detail: 'low' as const },
+      },
+    ]);
 
     const response = await client.chat.completions.create({
       model,
@@ -196,16 +213,18 @@ function buildCriteria(config: ChecklistConfig): ChecklistItem[] {
   return [...byId.values()];
 }
 
-async function loadScreenshots(screenshotsDir: string): Promise<string[]> {
-  const b64s: string[] = [];
-  for (const name of SCREENSHOT_NAMES) {
-    const path = join(screenshotsDir, `${name}.png`);
+async function loadCaptionedScreenshots(
+  screenshotsDir: string,
+): Promise<Array<{ name: string; caption: string; base64: string }>> {
+  const out: Array<{ name: string; caption: string; base64: string }> = [];
+  for (const entry of SCREENSHOTS) {
+    const path = join(screenshotsDir, `${entry.name}.png`);
     if (existsSync(path)) {
       const buf = await readFile(path);
-      b64s.push(buf.toString('base64'));
+      out.push({ name: entry.name, caption: entry.caption, base64: buf.toString('base64') });
     }
   }
-  return b64s;
+  return out;
 }
 
 function parseJudgeOutput(raw: string): JudgeOutput {

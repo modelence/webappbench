@@ -98,6 +98,13 @@ export async function scoreSubmission(
         return scoreF5(errorCollector);
       });
       await page.screenshot({ path: join(paths.screenshots, 'post-interaction.png'), fullPage: true }).catch(() => undefined);
+      // scrolled-viewport.png: viewport-sized capture taken AFTER scrolling 800px
+      // down. Used by F4/V1 to verify that elements claimed to be sticky/fixed
+      // actually pin to the viewport. If a nav is sticky, it appears at the top
+      // of this image; if not, it scrolls out of frame.
+      await page.evaluate(() => window.scrollTo(0, 800)).catch(() => undefined);
+      await page.waitForTimeout(500);
+      await page.screenshot({ path: join(paths.screenshots, 'scrolled-viewport.png'), fullPage: false }).catch(() => undefined);
       await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight / 2)).catch(() => undefined);
       await page.waitForTimeout(500);
       await page.screenshot({ path: join(paths.screenshots, 'mid-scroll.png'), fullPage: false }).catch(() => undefined);

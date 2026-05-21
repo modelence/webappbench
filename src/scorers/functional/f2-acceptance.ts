@@ -2,7 +2,7 @@ import type { Locator, Page } from '@playwright/test';
 import type { AcceptanceCriterion, SetupAction } from '../../core/types.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
 
-export const F2_VERSION = '0.2.0';
+export const F2_VERSION = '0.3.0';
 
 const VISIBILITY_TIMEOUT_MS = 5_000;
 // Used by setup actions (fill/click/press/waitFor) — same budget as
@@ -77,7 +77,7 @@ async function evalCriterion(
       return { id: c.id, kind, passed: false, note: `assertion failed: ${c.assert}` };
     }
     if (c.custom) {
-      const customOk = await runCustom(locator, c.custom);
+      const customOk = await runCustom(page, locator, c.custom);
       return customOk
         ? { id: c.id, kind, passed: true }
         : { id: c.id, kind, passed: false, note: `custom failed: ${c.custom}` };
@@ -199,7 +199,15 @@ async function runAssertion(locator: Locator, assert: string): Promise<boolean> 
   throw new Error(`Unsupported assertion: ${assert}`);
 }
 
-async function runCustom(locator: Locator, expr: string): Promise<boolean> {
+// Pixel tolerance for sticky checks. After scrolling, a sticky/fixed element may
+// shift a few px due to subpixel rounding or scroll-state styling (e.g. nav adds
+// a border on scroll). 50px is generous enough to absorb that without admitting
+// a non-sticky element that scrolls fully out of frame.
+const STICKY_TOP_TOLERANCE_PX = 50;
+const STICKY_SCROLL_DISTANCE_PX = 600;
+const STICKY_SETTLE_MS = 300;
+
+async function runCustom(page: Page, locator: Locator, expr: string): Promise<boolean> {
   const bboxMatch = expr.match(/^boundingBox\.(x|y|width|height)\s*(<=|>=|<|>|===|==)\s*(-?\d+)$/);
   if (bboxMatch) {
     const [, axisRaw, op, numStr] = bboxMatch;
@@ -224,5 +232,31 @@ async function runCustom(locator: Locator, expr: string): Promise<boolean> {
         return false;
     }
   }
+  if (expr === 'stickyAfterScroll') {
+    return checkStickyAfterScroll(page, locator);
+  }
   throw new Error(`Unsupported custom expression: ${expr}`);
+}
+
+// Verifies an element stays pinned near the top of the viewport after the page
+// is scrolled. Works for both `position: sticky` and `position: fixed`. The
+// element must start near the top (initialTop <= tolerance) and remain near
+// the top after a scroll of STICKY_SCROLL_DISTANCE_PX.
+async function checkStickyAfterScroll(page: Page, locator: Locator): Promise<boolean> {
+  const element = locator.first();
+  const initialBox = await element.boundingBox();
+  if (!initialBox) return false;
+  if (initialBox.y > STICKY_TOP_TOLERANCE_PX) return false;
+
+  const originalScrollY = await page.evaluate(() => window.scrollY).catch(() => 0);
+  try {
+    await page.evaluate((y) => window.scrollTo(0, y), STICKY_SCROLL_DISTANCE_PX);
+    await page.waitForTimeout(STICKY_SETTLE_MS);
+    const scrolledBox = await element.boundingBox();
+    if (!scrolledBox) return false;
+    return scrolledBox.y <= STICKY_TOP_TOLERANCE_PX;
+  } finally {
+    await page.evaluate((y) => window.scrollTo(0, y), originalScrollY).catch(() => undefined);
+    await page.waitForTimeout(STICKY_SETTLE_MS).catch(() => undefined);
+  }
 }

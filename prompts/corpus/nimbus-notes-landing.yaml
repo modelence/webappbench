@@ -18,6 +18,7 @@ must_have:
   - id: sticky_nav
     locator: "getByRole('navigation')"
     assert: "toBeVisible"
+    custom: "stickyAfterScroll"
 
 should_have:
   # At least 3 subheadings (h2 or h3) — proxy for "three-feature grid" without
