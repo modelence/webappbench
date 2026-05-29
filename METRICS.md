@@ -659,7 +659,7 @@ Either sub-check is N/A when its input is missing (no source ZIP for secrets, or
 `score = max(0, 1 - penalty / 20)`
 `passed = no critical or high findings`
 
-**Patterns (13 total):**
+**Patterns (16 total):**
 
 | Pattern ID | Label | Severity | Client-side only |
 |---|---|---|---|
@@ -676,6 +676,13 @@ Either sub-check is N/A when its input is missing (no source ZIP for secrets, or
 | `hardcoded_admin_email` | Hardcoded admin email used for privilege check | medium | no |
 | `hardcoded_admin_password` | Hardcoded admin or default password constant | medium | no |
 | `password_reset_no_token` | Password reset that updates password without a token/otp/code in surrounding context | high | no |
+| `xss_unsanitized_html` | `dangerouslySetInnerHTML` / `.innerHTML =` / Vue `v-html` with no sanitizer (DOMPurify/sanitize-html/xss) imported or used in the file | high | yes |
+| `insecure_transport` | Disabled TLS verification (`rejectUnauthorized: false`, `NODE_TLS_REJECT_UNAUTHORIZED=0`, `strictSSL: false`) or plaintext `http://` request target (excludes localhost and XML namespace/schema URLs) | medium | no |
+| `sensitive_data_logged` | `console.*` / `logger.*` call logging `req.body`, `req.headers`, an auth header, or a secret-named binding (password/secret/api_key/access_token/etc.) | medium | no |
+
+**Secure-by-default patterns (v0.2.0):** the last three patterns close P2 ("secure code-generation defaults") gaps from the Lovable × AIUC-1 whitepaper analysis ([docs/whitepaper-gap.md](docs/whitepaper-gap.md) §3). `xss_unsanitized_html` uses the same in-file context heuristic as `password_reset_no_token` (confirms a sanitizer is *absent* before flagging the sink) and ships at **high** (auto-fail) given low false-positive risk. `insecure_transport` and `sensitive_data_logged` ship at **medium** (deduct-only, never flip `passed`) because their match surface is noisier; their false-positive rate is validated against the existing `artifacts/` corpus before any promotion to high.
+
+`xss_unsanitized_html` suppresses CSS injection into a `<style>` element: the canonical shadcn/ui `<ChartStyle>` component sets `dangerouslySetInnerHTML` on a `<style>` tag to emit theme CSS custom properties from code-controlled config, which is not a markup-XSS sink. A pre-ship dry-run across the 10-tool `artifacts/` corpus initially matched 7 trees — *all* of them this one shadcn boilerplate file (`components/ui/chart.tsx`) — so the `<style>` guard was added; the re-run matched 0. `insecure_transport` and `sensitive_data_logged` matched 0 on the landing-page corpus (no signal yet, no noise).
 
 **Within-Security weight (research):** 35%.
 
@@ -835,6 +842,6 @@ These are research positions tracked here so they don't get re-debated. None are
 | v2 | `visual/v2-design.ts` | 0.2.0 | 8 checks: 4 layout (whitespace, contrast, font size, line length) + 4 CSS conventions (box-sizing, prefers-reduced-motion, custom properties, :focus-visible). CSS-rule checks skip when stylesheets are CORS-blocked. |
 | v4 | `visual/v4-responsive.ts` | 0.1.0 | 3 viewports; horizontal overflow + touch targets |
 | s1 | `security/s1-secrets.ts` | 0.3.0 | Two sub-checks: source secrets (regex + Semgrep `p/secrets`+`p/owasp-top-ten` if installed + trufflehog filesystem if installed; findings unioned) + 6-header deployed audit; mean of whichever ran |
-| s2 | `security/s2-auth.ts` | 0.1.0 | 13 patterns; client-side awareness; weighted severity |
+| s2 | `security/s2-auth.ts` | 0.2.0 | 16 patterns; client-side awareness; weighted severity. v0.2.0 added secure-by-default patterns: `xss_unsanitized_html` (high), `insecure_transport` (medium), `sensitive_data_logged` (medium) |
 | s3 | `security/s3-vuln.ts` | 0.1.2 | npm audit; critical=10, high=3, moderate=1, low=0.1 penalty |
 | cost | `cost.ts` | 0.1.0 | Self-reported; informational only |

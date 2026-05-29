@@ -55,7 +55,7 @@ See [METRICS.md](METRICS.md) for the full per-scorer spec, weights, and rational
 | Scorer | Weight | Measures |
 |---|---|---|
 | **S1** secrets + headers | 4.4% | (a) Source secret scan unioned across regex (always on), Semgrep `p/secrets` + `p/owasp-top-ten` (if installed), trufflehog filesystem (if installed). (b) Deployed HTTP header audit: CSP, HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy. |
-| **S2** auth patterns | 3.85% | 13 deterministic anti-pattern checks for Supabase service-role keys in client code, RLS disabled, JWT decode without verify, Firebase test mode, Stripe/OpenAI keys in client bundle, hardcoded admin emails/passwords, password reset without token. Source-only. |
+| **S2** auth patterns | 3.85% | 16 deterministic anti-pattern checks for Supabase service-role keys in client code, RLS disabled, JWT decode without verify, Firebase test mode, Stripe/OpenAI keys in client bundle, hardcoded admin emails/passwords, password reset without token, unsanitized HTML (XSS) sinks, insecure transport, sensitive data in logs. Source-only. |
 | **S3** vulnerabilities | 2.75% | `npm audit` weighted by severity (critical×10 + high×3 + moderate + low×0.1). Source-only. |
 
 ### Cost / speed (informational, excluded from composite)

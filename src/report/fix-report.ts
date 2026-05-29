@@ -620,7 +620,7 @@ async function formatS2(result: ScorerResult, sourceDir: string | null): Promise
 
   const findings = (d['findings'] as Array<Record<string, unknown>>) ?? [];
   const lines: string[] = [];
-  lines.push(`**What this measures**: 13 deterministic auth anti-pattern checks — Supabase service-role keys in client code, RLS disabled, JWT decode without signature verify, Firebase test mode, hardcoded admin emails/passwords, password reset without token, Stripe/OpenAI keys in client bundle.`);
+  lines.push(`**What this measures**: 16 deterministic auth and secure-by-default anti-pattern checks — Supabase service-role keys in client code, RLS disabled, JWT decode without signature verify, Firebase test mode, hardcoded admin emails/passwords, password reset without token, Stripe/OpenAI keys in client bundle, unsanitized HTML (XSS) sinks, insecure transport, and sensitive data written to logs.`);
   lines.push('');
   const sev = d['bySeverity'] as Record<string, number> | undefined;
   if (sev) {
@@ -655,7 +655,7 @@ async function formatS2(result: ScorerResult, sourceDir: string | null): Promise
     if (f['snippet']) lines.push(`  Matched line: \`${String(f['snippet'])}\``);
   }
   lines.push('');
-  lines.push('**Critical/high findings must be fixed before shipping**: service-role keys belong only in server-side code; JWT tokens must be verified server-side, not just decoded client-side; Firebase rules must enforce auth before production.');
+  lines.push('**Critical/high findings must be fixed before shipping**: service-role keys belong only in server-side code; JWT tokens must be verified server-side, not just decoded client-side; Firebase rules must enforce auth before production; HTML written via dangerouslySetInnerHTML/innerHTML/v-html must be sanitized (DOMPurify) before render.');
   return lines.join('\n');
 }
 

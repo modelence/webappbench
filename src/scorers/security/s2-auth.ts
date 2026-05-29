@@ -2,7 +2,7 @@ import { extname, join, relative } from 'node:path';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import type { ScorerResult } from '../types.ts';
 
-export const S2_VERSION = '0.1.0';
+export const S2_VERSION = '0.2.0';
 
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'out', '.cache']);
 
@@ -40,8 +40,10 @@ interface AuthPattern {
 }
 
 const SOURCE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
+// Source extensions plus `.vue`, for patterns (XSS) that also apply to Vue SFCs.
+const MARKUP_SOURCE_EXTS = new Set([...SOURCE_EXTS, '.vue']);
 const SCHEMA_EXTS = new Set(['.sql', '.prisma', '.graphql']);
-const ALL_EXTS = new Set([...SOURCE_EXTS, ...SCHEMA_EXTS, '.json', '.yaml', '.yml', '.env', '.toml']);
+const ALL_EXTS = new Set([...SOURCE_EXTS, ...SCHEMA_EXTS, '.json', '.yaml', '.yml', '.env', '.toml', '.vue']);
 
 const AUTH_PATTERNS: AuthPattern[] = [
   // ── Supabase ──────────────────────────────────────────────────────────────
@@ -220,6 +222,80 @@ const AUTH_PATTERNS: AuthPattern[] = [
       const context = content.slice(Math.max(0, lineIdx - 500), lineIdx + 500);
       const hasTokenCheck = /(?:token|otp|code|hash|verify|resetToken)/i.test(context);
       return !hasTokenCheck;
+    },
+  },
+
+  // ── Secure-by-default (P2) ──────────────────────────────────────────────────
+
+  {
+    id: 'xss_unsanitized_html',
+    label: 'Unsanitized HTML injection (XSS sink) without a sanitizer',
+    severity: 'high',
+    clientSideOnly: true,
+    exts: MARKUP_SOURCE_EXTS,
+    // Flags dangerouslySetInnerHTML / .innerHTML = / Vue v-html only when no
+    // sanitizer (DOMPurify, sanitize-html, xss) is imported or used in the file.
+    match: (line, content) => {
+      const isSink =
+        /dangerouslySetInnerHTML/.test(line) ||
+        /\.innerHTML\s*=/.test(line) ||
+        /\sv-html\s*=/.test(line);
+      if (!isSink) return false;
+      // Suppress CSS injection into a <style> element. The canonical shadcn/ui
+      // `<ChartStyle>` component sets dangerouslySetInnerHTML on a <style> tag to
+      // emit theme CSS custom properties from code-controlled config — not a
+      // markup-XSS sink. Check the nearest preceding element-open tag.
+      if (/dangerouslySetInnerHTML/.test(line)) {
+        const lineIdx = content.indexOf(line);
+        if (lineIdx !== -1) {
+          const before = content.slice(Math.max(0, lineIdx - 300), lineIdx);
+          const lastTag = before.match(/<([a-zA-Z][a-zA-Z0-9]*)\b(?![^<]*<)/);
+          if (lastTag && lastTag[1]?.toLowerCase() === 'style') return false;
+        }
+      }
+      const hasSanitizer =
+        /from\s+['"`](?:dompurify|isomorphic-dompurify|sanitize-html|xss)['"`]/i.test(content) ||
+        /require\(['"`](?:dompurify|isomorphic-dompurify|sanitize-html|xss)['"`]\)/i.test(content) ||
+        /\bDOMPurify\.sanitize\b/.test(content) ||
+        /\bsanitizeHtml\b/.test(content);
+      return !hasSanitizer;
+    },
+  },
+
+  {
+    id: 'insecure_transport',
+    label: 'Insecure transport — plaintext URL or disabled TLS verification',
+    severity: 'medium',
+    clientSideOnly: false,
+    exts: SOURCE_EXTS,
+    match: (line) => {
+      if (/rejectUnauthorized\s*:\s*false/.test(line)) return true;
+      if (/strictSSL\s*:\s*false/.test(line)) return true;
+      if (/NODE_TLS_REJECT_UNAUTHORIZED\s*[:=]\s*['"`]?0/.test(line)) return true;
+      // Plaintext http:// used as a request target or base URL, excluding
+      // localhost/loopback and XML namespace / schema identifiers.
+      const httpUrl = /['"`]http:\/\/(?!localhost|127\.0\.0\.1|0\.0\.0\.0)[^'"` ]+['"`]/;
+      if (!httpUrl.test(line)) return false;
+      if (/w3\.org|schema\.org|xmlns|\.dtd|\.xsd/.test(line)) return false;
+      return /\b(?:fetch|axios|baseURL|apiUrl|apiBase|endpoint|url)\b/i.test(line);
+    },
+  },
+
+  {
+    id: 'sensitive_data_logged',
+    label: 'Sensitive data written to logs (request body, auth header, secret, or PII)',
+    severity: 'medium',
+    clientSideOnly: false,
+    exts: SOURCE_EXTS,
+    match: (line) => {
+      const isLogCall = /\b(?:console\.(?:log|info|warn|error|debug)|logger\.\w+)\s*\(/.test(line);
+      if (!isLogCall) return false;
+      return (
+        /\breq\.body\b/.test(line) ||
+        /\breq\.headers\b/.test(line) ||
+        /\b(?:authorization|auth_header)\b/i.test(line) ||
+        /\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|refresh[_-]?token|private[_-]?key)\b/i.test(line)
+      );
     },
   },
 ];

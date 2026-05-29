@@ -175,6 +175,7 @@ C7's LLM rubric currently spans naming, separation of concerns, component reuse,
 - 📋 **V2** typographic hierarchy depth + color count/harmony — remaining V2 gaps after the v0.2 CSS-signal additions
 - 📋 **V3** reference-design fidelity (CLIP + Block-Match + Sørensen-Dice + position + CIEDE2000) — enables prompts with reference images ("make it look like Linear"). Requires both V3-aware prompts and the Design2Code metric stack.
 - 📋 **S3** `osv.dev` cross-check — catches CVEs not yet in the npm advisory feed
+- ✅ **S2** secure-by-default patterns (`0.2.0`): added `xss_unsanitized_html` (high — `dangerouslySetInnerHTML`/`innerHTML`/`v-html` with no in-file sanitizer), `insecure_transport` (medium — disabled TLS verify or plaintext `http://` request target), `sensitive_data_logged` (medium — `req.body`/auth headers/secret-named bindings logged). Closes P2 "secure code-generation defaults" gaps from the Lovable × AIUC-1 whitepaper analysis ([docs/whitepaper-gap.md](docs/whitepaper-gap.md) §3). 13 → 16 patterns.
 - 📋 **S2** quarterly pattern refresh process — keeps auth anti-patterns current as Supabase/Firebase/Clerk evolve
 
 ### Cost instrumentation
