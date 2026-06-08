@@ -1,6 +1,6 @@
 import type { ScorerContext, ScorerResult } from '../types.ts';
 
-export const V2_VERSION = '0.2.0';
+export const V2_VERSION = '0.2.1';
 
 interface DesignFacts {
   // Whitespace: fraction of viewport that is background-colored (sampled grid)
@@ -81,13 +81,36 @@ export async function runV2(ctx: ScorerContext): Promise<ScorerResult> {
       let fontSizeSampled = 0, readableFontCount = 0;
       let lineLengthSampled = 0, lineLengthPassed = 0;
 
+      // Walk up the ancestor chain to find the first element with a solid
+      // (non-transparent) background-color. Returns null if every ancestor up
+      // to <body> is transparent or has only a background-image — those nodes
+      // are skipped from the contrast sample rather than using a potentially
+      // wrong bodyBg fallback (e.g. a paper-grain texture parent).
+      const parseAlpha = (c) => { const m = c.match(/rgba?\\([^)]+,\\s*([\\d.]+)\\s*\\)/); return m ? parseFloat(m[1]) : 1; };
+      const isOpaque = (c) => c && c !== 'transparent' && parseAlpha(c) >= 0.05;
+      const resolvedBg = (el) => {
+        let cur = el;
+        while (cur && cur !== document.documentElement) {
+          const cs = window.getComputedStyle(cur);
+          const c = cs.backgroundColor;
+          if (isOpaque(c)) return c;
+          // If this element has a background-image, stop — we cannot determine
+          // the effective background color computationally.
+          if (cs.backgroundImage && cs.backgroundImage !== 'none') return null;
+          cur = cur.parentElement;
+        }
+        // Fall back to body background only when the entire chain is transparent
+        // with no background-image interference.
+        return isOpaque(bodyBg) ? bodyBg : null;
+      };
+
       for (const tn of textNodes) {
         const el = tn.parentElement;
         if (!el) continue;
         const style = window.getComputedStyle(el);
         const fg = parseColor(style.color);
-        const bgCss = style.backgroundColor;
-        const bg = parseColor(bgCss !== 'rgba(0, 0, 0, 0)' ? bgCss : bodyBg);
+        const bgCss = resolvedBg(el);
+        const bg = bgCss ? parseColor(bgCss) : null;
         if (fg && bg) {
           contrastSampled++;
           const fontSize = parseFloat(style.fontSize);
