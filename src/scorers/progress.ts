@@ -2,11 +2,16 @@ import { formatScorerDetail } from './format.ts';
 import type { ProgressEvent } from './orchestrate.ts';
 import type { ScorerResult } from './types.ts';
 
+// Display order, grouped by dimension. Independent of execution order in
+// orchestrate.ts (which is dependency-driven: F1 gate, then page-state scorers,
+// then F7/F8/S4 last because they log in and mutate the page). The flush handler
+// buffers completed results and prints them in this order regardless of when
+// each finished.
 const ORDER = [
-  'f1', 'f2', 'f4', 'f5', 'f6',
+  'f1', 'f2', 'f4', 'f5', 'f6', 'f7', 'f8',
   'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9',
   'v1', 'v2', 'v4',
-  's1', 's2', 's3',
+  's1', 's2', 's3', 's4',
   'cost',
 ];
 
@@ -16,24 +21,45 @@ interface Completed {
   result: ScorerResult;
 }
 
+const ORDER_INDEX = new Map(ORDER.map((id, i) => [id, i]));
+const BAR_WIDTH = 24;
+
 /**
  * Returns an onProgress handler that:
- * - Shows a live "running…" spinner for the active scorer
- * - Buffers completed results
- * - After each completion, flushes any newly printable results in canonical order
+ * - Renders a single in-place progress bar while scorers run (so the live view
+ *   doesn't depend on — or expose — execution order)
+ * - Buffers all results, then prints them once in display order on flush()
  */
 export function makeProgressHandler(): {
   onProgress: (e: ProgressEvent) => void;
   flush: () => void;
 } {
   const completed = new Map<string, Completed>();
-  let nextFlushIdx = 0;     // index into ORDER of the next line to print
-  let spinnerName = '';     // currently displayed "running…" line
+  let running = '';
+  let lastBarLen = 0;
+  // Total is unknown upfront (depends on source ZIP / backend block), so we
+  // estimate against ORDER and let the count catch up if more arrive.
+  const estimatedTotal = ORDER.length;
 
-  function clearSpinner() {
-    if (spinnerName) {
-      process.stdout.write(`\r${' '.repeat(spinnerName.length + 16)}\r`);
-      spinnerName = '';
+  const isTTY = Boolean(process.stdout.isTTY);
+
+  function renderBar() {
+    if (!isTTY) return; // in non-TTY (CI, piped) skip the live bar; results print on flush
+    const done = completed.size;
+    const total = Math.max(estimatedTotal, done);
+    const filled = Math.round((done / total) * BAR_WIDTH);
+    const bar = '█'.repeat(filled) + '░'.repeat(BAR_WIDTH - filled);
+    const label = running ? ` · running ${running}` : '';
+    const line = `  [${bar}] ${done}/${total}${label}`;
+    process.stdout.write(`\r${line}${' '.repeat(Math.max(0, lastBarLen - line.length))}`);
+    lastBarLen = line.length;
+  }
+
+  function clearBar() {
+    if (!isTTY) return;
+    if (lastBarLen > 0) {
+      process.stdout.write(`\r${' '.repeat(lastBarLen)}\r`);
+      lastBarLen = 0;
     }
   }
 
@@ -46,43 +72,31 @@ export function makeProgressHandler(): {
     process.stdout.write(`  ${c.name.padEnd(5)} ${pass}   ${score}   ${elapsed.padEnd(6)}${suffix}\n`);
   }
 
-  function tryFlush() {
-    // Print all consecutive completed scorers from nextFlushIdx onward.
-    while (nextFlushIdx < ORDER.length) {
-      const id = ORDER[nextFlushIdx]!;
-      const c = completed.get(id);
-      if (!c) break;
-      clearSpinner();
-      printLine(c);
-      nextFlushIdx++;
-    }
-    // Reprint spinner if there's still an active one waiting.
-    if (spinnerName) {
-      process.stdout.write(`  ${spinnerName.padEnd(5)} running…`);
-    }
-  }
-
   function onProgress(e: ProgressEvent) {
     if (e.kind === 'scorer_start') {
-      clearSpinner();
-      spinnerName = e.name;
-      process.stdout.write(`  ${e.name.padEnd(5)} running…`);
+      running = e.name;
+      renderBar();
     } else {
-      if (spinnerName === e.name) {
-        // Overwrite the spinner line if it's the same scorer finishing.
-        process.stdout.write('\r' + ' '.repeat(spinnerName.length + 16) + '\r');
-        spinnerName = '';
-      }
       completed.set(e.name, { name: e.name, elapsedMs: e.elapsedMs, result: e.result });
-      tryFlush();
+      if (running === e.name) running = '';
+      renderBar();
     }
   }
 
-  // Call after scoreSubmission resolves to print any scorers not in ORDER.
+  // Print every result once, in display order (ORDER), with any out-of-ORDER
+  // scorers appended. Called after scoreSubmission resolves.
   function flush() {
-    clearSpinner();
+    clearBar();
+    const printed = new Set<string>();
+    for (const id of ORDER) {
+      const c = completed.get(id);
+      if (c) {
+        printLine(c);
+        printed.add(id);
+      }
+    }
     for (const [name, c] of completed) {
-      if (!ORDER.includes(name)) printLine(c);
+      if (!printed.has(name)) printLine(c);
     }
   }
 

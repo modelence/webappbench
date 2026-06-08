@@ -51,6 +51,26 @@ const checklistConfigSchema = z.object({
   placeholder_copy: z.boolean().default(false),
 }).default({ extra: [], placeholder_copy: false });
 
+// Backend probe declarations (YAML, snake_case). Normalized to the camelCase
+// BackendProbe type in core/backend.ts. Read-only probes only — the union admits
+// no write/delete/escalation kind by construction. Consumed by the planned S4
+// scorer; absent ⇒ S4 is N/A for the prompt. See docs/s4-backend-security-plan.md.
+const backendProbeYamlSchema = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('unauth_get'),
+    id: z.string().min(1),
+    path: z.string().min(1),
+    expect_status: z.array(z.number().int()).nonempty(),
+  }),
+  z.object({
+    kind: z.literal('cross_user_get'),
+    id: z.string().min(1),
+    path: z.string().min(1),
+    expect_status: z.array(z.number().int()).nonempty(),
+    forbid_body_contains: z.string().min(1),
+  }),
+]);
+
 export const promptSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/, 'id must be kebab-case'),
   tier: z.union([z.literal(1), z.literal(2), z.literal(3)]),
@@ -61,6 +81,7 @@ export const promptSchema = z.object({
   seo_applicable: z.array(seoCheckSchema).default([]),
   visual_checklist: checklistConfigSchema,
   functional_checklist: checklistConfigSchema,
+  backend_probes: z.array(backendProbeYamlSchema).default([]),
 });
 
 export type PromptYaml = z.infer<typeof promptSchema>;
@@ -82,6 +103,17 @@ export function normalizePrompt(raw: PromptYaml): Prompt {
       extra: raw.functional_checklist.extra,
       placeholderCopy: raw.functional_checklist.placeholder_copy,
     },
+    backendProbes: raw.backend_probes.map((p) =>
+      p.kind === 'unauth_get'
+        ? { kind: p.kind, id: p.id, path: p.path, expectStatus: p.expect_status }
+        : {
+            kind: p.kind,
+            id: p.id,
+            path: p.path,
+            expectStatus: p.expect_status,
+            forbidBodyContains: p.forbid_body_contains,
+          },
+    ),
   };
 }
 

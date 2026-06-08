@@ -48,3 +48,21 @@ runs:
     prompt: todo-localstorage
     url: https://daily-todo.your-handle.repl.co/
     # source: ./source-exports/replit-todo.zip
+
+  # Tier 3 — backend-bearing app (v0.3 backend track). Adds an optional `backend`
+  # block consumed by F7 (auth round-trip), F8 (cross-session persistence), and
+  # S4 (backend security probes). Omit it and those scorers score N/A.
+  #
+  # The ONLY input is two test accounts. The harness signs in through the real UI
+  # with each, and auto-discovers everything else (the data endpoint, the record
+  # to probe, the session token) by observing each session's traffic — no
+  # DevTools, no anon keys, no record ids. Create both accounts MANUALLY (never
+  # automate signup for tools that prohibit it, e.g. Lovable). Use a recognizable
+  # test domain like bench-<run>@<your-domain>.test.
+  # - tool: lovable
+  #   prompt: crm-contacts
+  #   url: https://example-crm.lovable.app/
+  #   backend:
+  #     user_a: { email: bench-a@your-domain.test, password: "..." }
+  #     user_b: { email: bench-b@your-domain.test, password: "..." }
+  #     # backend_url: https://api.example-crm.com   # OPTIONAL — only if the API is on a different origin than `url`

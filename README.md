@@ -16,7 +16,7 @@ See [METRICS.md](METRICS.md) for the full per-scorer spec, weights, and rational
 
 ## Metrics tracked
 
-19 scorers across 5 dimensions. Composite score = weighted mean of dimension scores (Functional 47% / Code Quality 18% / Visual 24% / Security 11%; Cost 15% redistributed because it is informational only).
+19 scorers across 5 dimensions, plus 3 additive backend-track scorers (F7/F8/S4) that activate only on Tier 3 backend-bearing submissions. Composite score = weighted mean of dimension scores (Functional 47% / Code Quality 18% / Visual 24% / Security 11%; Cost 15% redistributed because it is informational only). The composite-contribution percentages below are for the default (non-backend) corpus; on a backend submission F7/F8/S4 reflow in and the others compress proportionally (see [METRICS.md](METRICS.md) § "Backend-track ... scorers (additive)").
 
 ### Functional correctness (47% of composite)
 
@@ -27,6 +27,8 @@ See [METRICS.md](METRICS.md) for the full per-scorer spec, weights, and rational
 | **F4** intent judge | 4.7% | LLM judge (vision) over screenshots scoring intent match, feature completeness, content relevance, flow coherence. Per-prompt extras supported via `functional_checklist.extra`. |
 | **F5** errors | 2.35% | Console errors + 4xx/5xx network responses. 0 errors = 1.0; linear decay to 0 at 10+. |
 | **F6** verbatim | 11.75% | Exact strings, hex values, structural identifiers from the prompt (e.g. `"Get started"`, `#003366`). Source-only. |
+| **F7** auth round-trip | additive | _Backend track._ login → create a marked record → log out → log in again → record persists. N/A without a `backend` block. |
+| **F8** cross-session | additive | _Backend track._ Record created in browser context A must appear in a fresh incognito context B after login — real backend vs. localStorage. |
 
 ### Code quality (18% of composite)
 
@@ -57,6 +59,7 @@ See [METRICS.md](METRICS.md) for the full per-scorer spec, weights, and rational
 | **S1** secrets + headers | 4.4% | (a) Source secret scan unioned across regex (always on), Semgrep `p/secrets` + `p/owasp-top-ten` (if installed), trufflehog filesystem (if installed). (b) Deployed HTTP header audit: CSP, HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy. |
 | **S2** auth patterns | 3.85% | 16 deterministic anti-pattern checks for Supabase service-role keys in client code, RLS disabled, JWT decode without verify, Firebase test mode, Stripe/OpenAI keys in client bundle, hardcoded admin emails/passwords, password reset without token, unsanitized HTML (XSS) sinks, insecure transport, sensitive data in logs. Source-only. |
 | **S3** vulnerabilities | 2.75% | `npm audit` weighted by severity (critical×10 + high×3 + moderate + low×0.1). Source-only. |
+| **S4** backend probes | additive | _Backend track._ Read-only runtime probes — unauthenticated GET (must be rejected) + cross-user GET (user A must not read user B's data). Catches the canonical "RLS off" failure S2 only infers from client code. |
 
 ### Cost / speed (informational, excluded from composite)
 
@@ -184,6 +187,7 @@ Optional fields:
 - `visual_checklist.extra[]` — per-prompt criteria added to V1's default rubric.
 - `visual_checklist.placeholder_copy` — set `true` to skip V1's 3 copy-quality defaults when the prompt explicitly invites placeholder content (e.g., a todo app prompt that asks for sample tasks).
 - `functional_checklist.extra[]` — per-prompt criteria added to F4's default rubric.
+- `backend_probes[]` — read-only backend security probes for Tier 3 backend-bearing prompts (consumed by the planned S4 scorer). Each is `{ kind, id, path, expect_status }` where `kind` is `unauth_get` (GET a protected endpoint with no auth → expect 401/403) or `cross_user_get` (GET user B's resource while authed as user A → expect rejection; adds `forbid_body_contains`, a synthetic marker that must be absent). Requires the submission to carry a `backend` block (`backend_url` + `signup_credentials` + `seed_strategy` + `seed_records`); see `submissions.example.yaml`. Schema-only as of v0.2.x — no scorer consumes it yet.
 
 ### Acceptance criteria
 
@@ -267,7 +271,7 @@ src/
   report/generate.ts     # JSON artifacts → static HTML leaderboard
   cli.ts                 # Commander entrypoint
 prompts/
-  corpus/                # Active corpus — one Tier 1 landing + one Tier 2 localStorage app
+  corpus/                # Active corpus — Tier 1 landing, Tier 2 localStorage app, Tier 3 backend CRM (auth + per-user isolation; backend scorers land in v0.3)
   landing-extra/         # Archived v0.1 landing prompts; load with --corpus prompts/landing-extra for ad-hoc runs
 artifacts/               # .gitignored — scored runs land here
 METRICS.md               # Full per-scorer documentation, weights, rationale

@@ -124,25 +124,30 @@ Focus: extend the corpus to a backend-bearing Tier 3 CRM (real auth, real persis
 
 The driving change: **a Tier 3 CRM prompt that ships with a real backend** (Supabase, Firebase, or whatever the tool uses natively). This requires submission-flow changes and new scorers. Tools that don't ship a backend (Claude Artifacts, frontend-only v0 deploys) will score N/A on Tier 3 — that's an honest answer to "does this tool ship a real CRM?"
 
+- ✅ **Tier 3 prompt authored** (`prompts/corpus/crm-contacts.yaml`): multi-user "Rolodex" CRM — email/password auth, per-user contact lists, server-side data isolation. Declares `backend_probes` (unauth GET + cross-user GET) for the planned S4 scorer. F2 must_have covers the logged-out auth screen (testable today); authenticated-view criteria are should_have until the F7 login driver lands. Not yet referenced in `submissions.yaml`, so it does not score until a CRM submission is added.
+
 #### Submission contract
 
-- 📋 Optional `backend_url` field in `submissions.yaml` (often same as frontend, sometimes a separate API host)
-- 📋 Optional `signup_credentials` block — pre-seeded test account or a documented signup flow
-- 📋 `seed_strategy: signup_each_run | pre_seeded` — controls how F7/F8 reset state between runs
+- ✅ Optional `backend_url` field in `submissions.yaml` (often same as frontend, sometimes a separate API host) — Phase 0 contract (`core/backend.ts`)
+- ✅ Optional `signup_credentials` block — two test accounts (A/B) + auth mode (supabase / bearer_login / cookie_session)
+- ✅ `seed_strategy: signup_each_run | pre_seeded` — controls how F7/F8 reset state between runs; plus `seed_records` (known B-owned record + synthetic marker) for the S4 cross-user probe
+- ✅ `backend_probes` field on the prompt schema — read-only `unauth_get` / `cross_user_get` declarations (consumed by S4)
 - 📋 Per-tool backend documentation in README — what each tool ships, what users have to wire up
+
+> **Phase 0 shipped (schema-only):** the submission + prompt contract above is implemented and validated; no scorer consumes it yet. F7/F8/S4 (Phase 2) build on it. See [docs/s4-backend-security-plan.md](docs/s4-backend-security-plan.md).
 
 #### New scorers
 
-- 📋 **F7** auth round-trip — sign up → log in → make a change → log out → log in again → change persists. Catches broken sessions, broken persistence, broken signup forms.
-- 📋 **F8** backend persistence across sessions — create entity in browser context A → open same URL in fresh incognito context B → log in → entity is there. Distinguishes localStorage tools from real-backend tools.
+- ✅ **F7** auth round-trip (`0.1.0`, Phase 2) — login → create a marked record → log out → log in again → record persists. Drives the deployed login form via Playwright; N/A without `backend.signup_credentials`. `src/scorers/functional/f7-auth-roundtrip.ts`.
+- ✅ **F8** backend persistence across sessions (`0.1.0`, Phase 2) — record created in browser context A must appear in a fresh incognito context B after login. Distinguishes localStorage tools from real-backend tools. `src/scorers/functional/f8-cross-session.ts`.
 - 📋 **F9** scheduled-job execution — verifies cron / scheduled work both *exists* (config file present and parseable: `vercel.json` cron section, Supabase `pg_cron` enabled, Inngest / Trigger.dev registration) and *runs correctly* (harness POSTs to a force-trigger endpoint declared in the prompt's acceptance YAML, then verifies the side effect with timestamped fixture data). Currently unscored anywhere; AI tools handle scheduled work very inconsistently — broken cron config, stubs, hallucinated services.
-- 📋 **S4** backend security — direct API probes: unauthenticated GET on a contact-detail endpoint, cross-user GET (try to read user B's data as user A). Catches the canonical "Supabase RLS off" failure that S2 only catches via *client-side* hints today.
+- ✅ **S4** backend security (`0.1.0`, Phase 2) — read-only runtime probes: unauthenticated GET (must be rejected) + cross-user GET (user A must not read user B's data). Supabase + bearer_login auth; `cross_tenant_leak` headline. Catches the canonical "Supabase RLS off" failure that S2 only catches via *client-side* hints. `src/scorers/security/s4-backend.ts`.
 
-S4 is the single biggest *security* signal-quality win in v0.3 — S2 catches code patterns that suggest auth is broken; S4 catches the actual server-side failure. F9 closes the previously-unscored cron / scheduled-work gap.
+S4 is the single biggest *security* signal-quality win in v0.3 — S2 catches code patterns that suggest auth is broken; S4 catches the actual server-side failure. F9 (still 📋) closes the previously-unscored cron / scheduled-work gap.
 
-#### F2 within-dim weight reflow when the backend track ships
+#### Within-dim weight model: backend scorers are additive (shipped)
 
-When F7/F8/F9 land, F2 narrows from its current 45% within-dim share to roughly 30%, with the freed weight redistributed across F7 (~10%), F8 (~10%), and F9 (~5–10% on prompts that exercise scheduled work; redistributes within Functional otherwise per `METRICS.md` § "Renormalization on null scorers"). Documented as a v0.3 weighting change, not a v0.2 break.
+F7/F8/S4 ship **additive** rather than narrowing F2/S1/S2/S3 for everyone. Each non-backend dimension still sums to 100; the backend scorers (F7 8, F8 7, S4 15) sit on top. Because they return null on non-backend submissions, null-renormalization divides only by the present scorers' weight-sum — so Tier 1/2 submissions score *exactly* as before (Functional /100, Security /100), while Tier 3 backend submissions reflow over the larger denominator (Functional /115, Security /115). This supersedes the earlier "narrow F2 to 30%" plan, which would have silently rescored every existing non-backend submission. F9 will follow the same additive model when it lands.
 
 #### Discipline
 

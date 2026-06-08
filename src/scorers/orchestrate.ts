@@ -21,6 +21,11 @@ import { runC8, C8_VERSION } from './code-quality/c8-install.ts';
 import { runS1, S1_VERSION } from './security/s1-secrets.ts';
 import { runS2, S2_VERSION } from './security/s2-auth.ts';
 import { runS3, S3_VERSION } from './security/s3-vuln.ts';
+import { runS4, S4_VERSION } from './security/s4-backend.ts';
+import { runF7, F7_VERSION } from './functional/f7-auth-roundtrip.ts';
+import { runF8, F8_VERSION } from './functional/f8-cross-session.ts';
+import { login, deleteAllContacts, createContact } from './backend/login.ts';
+import type { Account } from '../core/backend.ts';
 import { runC9, C9_VERSION } from './code-quality/c9-seo.ts';
 import { runV1, V1_VERSION } from './visual/v1-judge.ts';
 import { runV2, V2_VERSION } from './visual/v2-design.ts';
@@ -115,6 +120,15 @@ export async function scoreSubmission(
       // mobile context to avoid disturbing the main desktop page state.
       await captureMobileScreenshot(ctx.browser, ctx.submission.artifactUrl, paths.screenshots);
 
+      // For backend-bearing apps, the logged-out screenshots above only show the
+      // login screen — F4/V1 would judge the front door, not the app. Log in on
+      // a fresh context and capture the authenticated dashboard so the judges see
+      // the real UI. Best-effort: if login fails, judges fall back to the
+      // logged-out shots (missing dashboard.png is skipped, not an error).
+      if (submission.backend) {
+        await captureAuthenticatedScreenshots(ctx.browser, ctx.submission.artifactUrl, submission.backend.userA, paths.screenshots);
+      }
+
       results['c3'] = await runScorer('c3', () => runC3(ctx));
       results['c9'] = await runScorer('c9', () => runC9(ctx));
       results['f4'] = await runScorer('f4', () => runF4(ctx));
@@ -163,6 +177,20 @@ export async function scoreSubmission(
       results['s2'] = await runScorer('s2', () => runS2(sourceDir));
       results['s3'] = await runScorer('s3', () => runS3(sourceDir));
     }
+
+    // Backend track (F7/F8/S4): only when the submission carries a backend block.
+    // S4 is API-only; F7/F8 drive the login form, mutating page state, so they
+    // run last — after every screenshot/judge that depends on the logged-out
+    // landing page has already been captured above.
+    if (submission.backend) {
+      results['s4'] = await runScorer('s4', () => runS4(ctx));
+      results['f7'] = await runScorer('f7', () => runF7(ctx));
+      results['f8'] = await runScorer('f8', () => runF8(ctx));
+      // Single account cleanup, AFTER every backend scorer has run — removes all
+      // test data both accounts accumulated this submission. Done once here (not
+      // per-scorer) so a teardown can't wipe another scorer's in-flight data.
+      await cleanupTestAccounts(ctx.browser, ctx.submission.artifactUrl, submission.backend.userA, submission.backend.userB);
+    }
   } finally {
     await context.close();
     await browser.close();
@@ -194,6 +222,9 @@ export async function scoreSubmission(
       s1: S1_VERSION,
       ...(hasSource && { s2: S2_VERSION }),
       ...(hasSource && { s3: S3_VERSION }),
+      ...(submission.backend && { s4: S4_VERSION }),
+      ...(submission.backend && { f7: F7_VERSION }),
+      ...(submission.backend && { f8: F8_VERSION }),
       c9: C9_VERSION,
       cost: COST_VERSION,
     },
@@ -223,6 +254,80 @@ async function captureMobileScreenshot(
     // Best-effort — V1/F4 fall back to whatever screenshots are present.
   } finally {
     await ctx.close().catch(() => undefined);
+  }
+}
+
+// Log in as user A on a fresh context and capture the authenticated dashboard,
+// so F4/V1 judge the real app rather than the login screen. Best-effort — any
+// failure leaves the logged-out screenshots in place.
+async function captureAuthenticatedScreenshots(
+  browser: import('@playwright/test').Browser,
+  url: string,
+  account: Account,
+  screenshotsDir: string,
+): Promise<void> {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  try {
+    const page = await ctx.newPage();
+    const outcome = await login(page, url, account);
+    if (!outcome.ok) return;
+    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
+
+    // Capture the POPULATED dashboard so the judges see the real app — the list,
+    // a contact row, and its delete (✕) control. We create one contact right
+    // after login (the page is freshly interactive then; chaining a delete-all
+    // before a create poisons the create on hydration-sensitive SPAs). The empty
+    // state ("No contacts yet") is verified deterministically by F6 from source,
+    // so we deliberately don't try to screenshot it here.
+    await createContact(page, 'Sample Contact').catch(() => undefined);
+    await page.waitForTimeout(1000);
+    await page.screenshot({ path: join(screenshotsDir, 'dashboard.png'), fullPage: true }).catch(() => undefined);
+    // No teardown here — a single account cleanup runs at the very end of the
+    // submission, so nothing deletes another scorer's in-flight test data.
+  } catch {
+    // best-effort
+  } finally {
+    await ctx.close().catch(() => undefined);
+  }
+  // Mobile dashboard in its own context.
+  const mctx = await browser.newContext({ viewport: { width: 360, height: 800 } });
+  try {
+    const page = await mctx.newPage();
+    const outcome = await login(page, url, account);
+    if (!outcome.ok) return;
+    await page.waitForTimeout(2000);
+    await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
+    await page.screenshot({ path: join(screenshotsDir, 'dashboard-mobile.png'), fullPage: false }).catch(() => undefined);
+  } catch {
+    // best-effort
+  } finally {
+    await mctx.close().catch(() => undefined);
+  }
+}
+
+// Single end-of-submission cleanup: log into each test account and delete all
+// its contacts, so scoring doesn't accumulate litter across runs. Best-effort,
+// runs once after all scorers — never mid-scoring.
+async function cleanupTestAccounts(
+  browser: import('@playwright/test').Browser,
+  url: string,
+  ...accounts: Account[]
+): Promise<void> {
+  for (const account of accounts) {
+    const ctx = await browser.newContext();
+    try {
+      const page = await ctx.newPage();
+      const outcome = await login(page, url, account);
+      if (outcome.ok) {
+        await page.waitForTimeout(1500);
+        await deleteAllContacts(page).catch(() => undefined);
+      }
+    } catch {
+      // best-effort
+    } finally {
+      await ctx.close().catch(() => undefined);
+    }
   }
 }
 

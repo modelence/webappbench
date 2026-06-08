@@ -1,0 +1,117 @@
+id: crm-contacts
+tier: 3
+prompt: |
+  Build a multi-user CRM called "Rolodex" with real authentication and a real
+  backend (use whatever backend the platform provides natively — e.g. Supabase,
+  Firebase, or a built-in database). Requirements:
+
+  Authentication:
+    - Email + password sign-up and log-in. After signing up, the user lands on
+      their own contacts dashboard.
+    - A visible "Log out" control. Logging out returns to the login screen.
+    - Unauthenticated visitors who open the app see the login screen, not the
+      dashboard.
+
+  Contacts (each contact belongs to exactly one user — the one who created it):
+    - A "New contact" form with fields: Name, Email, Company. Submitting it adds
+      the contact to the current user's list.
+    - The dashboard lists the signed-in user's contacts, newest first, showing
+      Name and Company per row.
+    - Each contact row has a delete control (✕) that removes that contact.
+    - Empty state when the signed-in user has no contacts: friendly copy that
+      includes the literal text "No contacts yet" and a hint inviting them to
+      add their first contact. Do not show a blank pane or a spinner.
+
+  Data isolation (critical):
+    - A user can only ever see and modify their own contacts. User A must never
+      be able to read, list, or delete User B's contacts — not through the UI and
+      not by calling the backend API directly. Enforce this server-side
+      (row-level security / per-user authorization on every read and write), not
+      only by filtering in the browser.
+
+  Visual: clean and professional. A top bar with the "Rolodex" wordmark and the
+  log-out control; the contact list as the main content; the new-contact form
+  either inline above the list or in a clearly-labeled panel.
+
+# F2 acceptance criteria run via Playwright against the deployed URL. The two
+# must_have criteria test the LOGGED-OUT state, which is reachable today with no
+# login driver. The should_have criteria test AUTHENTICATED views — they require
+# the harness to log in as user A first, which lands with the F7 auth-round-trip
+# scorer (v0.3 Phase 2). Until then they assert against whatever the fresh URL
+# shows; they're soft (should_have) so they don't unfairly gate the score before
+# the login driver exists. Server-side isolation is NOT testable from the
+# browser at all — that's what S4's runtime probes cover (S4 auto-discovers
+# B's data endpoint by signing in as B; no probe paths are declared here).
+must_have:
+  # 1. Unauthenticated visitors see the login screen, not the dashboard.
+  - id: login_screen_when_logged_out
+    setup:
+      - kind: evaluate
+        expr: "() => { localStorage.clear(); sessionStorage.clear(); }"
+      - kind: reload
+    locator: "getByRole('textbox', { name: /email/i }).or(getByLabel(/email/i))"
+    assert: "toBeVisible"
+
+  # 2. A password field is present on the unauthenticated landing — confirms a
+  #    real auth form rather than a passwordless stub.
+  - id: password_field_present
+    setup:
+      - kind: evaluate
+        expr: "() => { localStorage.clear(); sessionStorage.clear(); }"
+      - kind: reload
+    locator: "locator('input[type=\"password\"]')"
+    assert: "toHaveCountAtLeast(1)"
+
+# F2 covers only the logged-out surface (it has no login driver). The
+# authenticated views — empty-state copy, the new-contact form, the log-out
+# control, and contact persistence — are exercised by the backend-track scorers
+# instead: F7 logs in, creates a contact, logs out, logs back in and confirms it
+# persists; F8 confirms cross-session persistence; S4 confirms per-user
+# isolation. So this prompt declares no should_have here rather than carrying
+# auth-gated criteria that F2 can never satisfy.
+should_have: []
+
+verbatim_constraints:
+  - type: exact_copy
+    value: "Rolodex"
+    where: "app wordmark in the top bar"
+  - type: exact_copy
+    value: "No contacts yet"
+    where: "empty-state copy when the signed-in user has no contacts"
+
+seo_applicable:
+  - title
+  - lang
+  - heading_hierarchy
+
+# No backend_probes are declared: S4 auto-discovers B's data endpoint by signing
+# in as user B and observing the dashboard's data request, then replays it as
+# user A to test isolation. The only submission input is two sets of credentials.
+# (backend_probes remains an optional override in the schema for prompts that
+# want to pin an exact endpoint, but this prompt relies on auto-discovery.)
+
+# Tier 3 dashboards may render seeded sample contacts during testing; allow the
+# judge to ignore placeholder contact content rather than penalize it.
+visual_checklist:
+  placeholder_copy: true
+  extra:
+    - id: auth_state_clarity
+      label: Auth-state clarity
+      description: >
+        The logged-out screen clearly reads as a login/sign-up screen, and the
+        logged-in dashboard clearly reads as the user's own contact list — the
+        two states are visually unambiguous.
+
+functional_checklist:
+  extra:
+    - id: contact_create_roundtrip
+      label: New contact appears after submit
+      description: >
+        Submitting the new-contact form adds the contact to the visible list
+        without a full-page error, and the list reflects the new row.
+    - id: per_user_isolation_ui
+      label: Dashboard shows only the signed-in user's contacts
+      description: >
+        The dashboard lists contacts belonging to the signed-in user only; there
+        is no global/all-users contact view. (S4 covers the server-side version;
+        this is the screenshot-judged UI version.)

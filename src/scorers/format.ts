@@ -184,6 +184,27 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
         return parts.join(', ');
       }
 
+      case 's4': {
+        if (d['note']) return String(d['note']).slice(0, 60);
+        if (d['crossTenantLeak']) return 'CROSS-TENANT LEAK — user A read user B data';
+        const run = Number(d['probesRun'] ?? 0);
+        const failed = Number(d['failedCount'] ?? 0);
+        if (run === 0) return 'no probes run';
+        return failed === 0 ? `${run} probe${run === 1 ? '' : 's'} passed` : `${failed}/${run} probes failed`;
+      }
+
+      case 'f7': {
+        if (d['note'] && d['passed'] === null) return String(d['note']).slice(0, 60);
+        const passedSteps = Number(d['passedSteps'] ?? 0);
+        const totalSteps = Number(d['totalSteps'] ?? 0);
+        return `${passedSteps}/${totalSteps} round-trip steps`;
+      }
+
+      case 'f8': {
+        if (d['note'] && d['passed'] === null) return String(d['note']).slice(0, 60);
+        return d['crossedSessions'] ? 'record crossed sessions (real backend)' : 'record did not persist across sessions';
+      }
+
       case 'c1': {
         const errors = Number(d['totalErrors'] ?? 0);
         const warns = Number(d['totalWarnings'] ?? 0);

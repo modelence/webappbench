@@ -22,14 +22,26 @@ import type { ScorerResult } from './types.ts';
 
 export type Dimension = 'functional' | 'code_quality' | 'visual' | 'security';
 
-// Within-dimension scorer weights — must sum to 100 per dimension.
+// Within-dimension scorer weights. The non-backend scorers in each dimension
+// sum to 100; the backend-track scorers (F7/F8/S4) are ADDITIVE on top.
+//
+// This is deliberate. F7/F8/S4 return null on any submission without a backend
+// block, so the null-redistribution rule divides only by the weight-sum of the
+// scorers actually present. For Tier 1/2 submissions that means dividing by 100
+// → the original proportions are preserved exactly (no silent rescoring). For a
+// Tier 3 backend submission all scorers are present and the effective weights
+// reflow over the larger sum (Functional → /115, Security → /115), which is the
+// intended "the dimension expands when there's a backend to measure" behavior
+// from ROADMAP v0.3 — rather than statically narrowing F2/S1/S2/S3 for everyone.
 const SCORER_WEIGHTS: Record<string, { dimension: Dimension; weight: number }> = {
-  // Functional (F1 + F2 + F4 + F5 + F6 = 100)
+  // Functional — non-backend scorers sum to 100 (F1+F2+F4+F5+F6); F7+F8 additive.
   f1: { dimension: 'functional', weight: 15 },
   f2: { dimension: 'functional', weight: 45 },
   f4: { dimension: 'functional', weight: 10 },
   f5: { dimension: 'functional', weight: 5 },
   f6: { dimension: 'functional', weight: 25 },
+  f7: { dimension: 'functional', weight: 8 },
+  f8: { dimension: 'functional', weight: 7 },
 
   // Code Quality (C1+C2+C3+C4+C5+C6+C7+C8+C9 = 100)
   c1: { dimension: 'code_quality', weight: 20 },
@@ -47,10 +59,13 @@ const SCORER_WEIGHTS: Record<string, { dimension: Dimension; weight: number }> =
   v2: { dimension: 'visual', weight: 30 },
   v4: { dimension: 'visual', weight: 15 },
 
-  // Security (S1 + S2 + S3 = 100)
+  // Security — non-backend scorers sum to 100 (S1+S2+S3 = 40/35/25); S4 additive.
+  // On non-backend submissions S4 is null and S1/S2/S3 keep their exact prior
+  // 40/35/25 proportions; on backend submissions S4 reflows in at 15/115 ≈ 13%.
   s1: { dimension: 'security', weight: 40 },
   s2: { dimension: 'security', weight: 35 },
   s3: { dimension: 'security', weight: 25 },
+  s4: { dimension: 'security', weight: 15 },
 };
 
 // Dimension weights — must sum to 100. Cost is excluded (informational only),

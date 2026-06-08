@@ -147,6 +147,9 @@ async function runSetupStep(page: Page, action: SetupAction): Promise<void> {
     }
     case 'reload': {
       await page.reload({ waitUntil: 'domcontentloaded' });
+      // SPAs mount their UI after domcontentloaded — give the network a moment
+      // to settle so the post-reload DOM is the rendered app, not the shell.
+      await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
       return;
     }
     case 'waitFor': {
@@ -187,12 +190,23 @@ async function runAssertion(locator: Locator, assert: string): Promise<boolean> 
   const countMatch = assert.match(/^toHaveCount\((\d+)\)$/);
   if (countMatch) {
     const expected = Number.parseInt(countMatch[1]!, 10);
+    // Exact count: wait until the count stabilises at the expected value (the
+    // first element appearing is enough to anchor the wait), then compare.
+    if (expected > 0) {
+      await locator.first().waitFor({ state: 'attached', timeout: VISIBILITY_TIMEOUT_MS }).catch(() => undefined);
+    }
     const actual = await locator.count();
     return actual === expected;
   }
   const countAtLeastMatch = assert.match(/^toHaveCountAtLeast\((\d+)\)$/);
   if (countAtLeastMatch) {
     const expected = Number.parseInt(countAtLeastMatch[1]!, 10);
+    // Auto-retry for SPA mount: wait for the locator to attach before counting,
+    // so a count run immediately after a reload doesn't race the framework's
+    // re-render and spuriously see 0.
+    if (expected > 0) {
+      await locator.first().waitFor({ state: 'attached', timeout: VISIBILITY_TIMEOUT_MS }).catch(() => undefined);
+    }
     const actual = await locator.count();
     return actual >= expected;
   }

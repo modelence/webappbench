@@ -113,10 +113,10 @@ async function loadRun(runDir: string): Promise<RunSummary | null> {
 // Ordered numerically within each letter group: f → c → v → s → cost.
 // Matches the console output order in src/scorers/progress.ts.
 const ALL_DIMS = [
-  'f1', 'f2', 'f4', 'f5', 'f6',
+  'f1', 'f2', 'f4', 'f5', 'f6', 'f7', 'f8',
   'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9',
   'v1', 'v2', 'v4',
-  's1', 's2', 's3',
+  's1', 's2', 's3', 's4',
   'cost',
 ] as const;
 // Dimensions that require an extracted source ZIP — used to hide entire columns
@@ -200,6 +200,8 @@ const METRIC_META: Record<string, { label: string; group: string; desc: string }
   f4: { label: 'F4 intent',      group: 'Functional',    desc: 'LLM judge over screenshots scoring functional intent on 4 criteria 1–5: intent match, feature completeness, content relevance, flow coherence. Also lists prompt-named features absent from the page.' },
   f5: { label: 'F5 errors',      group: 'Functional',    desc: 'Console errors, uncaught JS exceptions, and 4xx/5xx network responses collected during the full scoring session. 0 errors = 1.0; decays linearly to 0 at 10+ errors.' },
   f6: { label: 'F6 verbatim',    group: 'Functional',    desc: 'Exact string constraints specified in the prompt (e.g. "Get started", "Nimbus Notes") must appear verbatim in the rendered page. Source-only scorer.' },
+  f7: { label: 'F7 auth round-trip', group: 'Functional', desc: 'Backend track. Drives the deployed login form: log in → create a uniquely-marked record → log out → log in again → assert the record persists. Catches broken sessions and writes that do not persist server-side. N/A unless the submission carries a backend block with test credentials. Additive within-dim weight (null on non-backend submissions).' },
+  f8: { label: 'F8 cross-session', group: 'Functional',   desc: 'Backend track. Creates a marked record in browser context A, then opens the same URL in a fresh incognito context B and logs in — the record must be visible in B. Distinguishes a real backend from localStorage-only persistence. N/A unless a backend block is present. Additive within-dim weight.' },
   c1: { label: 'C1 lint',        group: 'Code Quality',  desc: 'ESLint with typescript-eslint recommended rules run over the source ZIP. Score decays linearly from 0 errors/1k LOC (1.0) to 20+ errors/1k LOC (0). Source-only.' },
   c2: { label: 'C2 types',       group: 'Code Quality',  desc: 'tsc --noEmit --strict run on the source. 0 type errors = 1.0; decays at 20 errors/1k LOC. "Cannot find module" errors are filtered out. Source-only.' },
   c3: { label: 'C3 a11y',        group: 'Code Quality',  desc: 'axe-core WCAG 2.1/2.2 AA audit. Score = 1 − (violations / (violations + passes)); weighted by violation impact (critical > serious > moderate > minor).' },
@@ -215,6 +217,7 @@ const METRIC_META: Record<string, { label: string; group: string; desc: string }
   s1: { label: 'S1 secrets+headers', group: 'Security',  desc: 'Two sub-checks. (1) Source secret scan combining three independent scanners — built-in 8-pattern regex (always on), Semgrep with p/secrets + p/owasp-top-ten rulesets (if installed), and trufflehog filesystem mode for high-entropy detection (if installed); findings unioned across scanners, any match = 0. (2) Deployed HTTP header audit — CSP, HSTS, X-Content-Type-Options, X-Frame-Options, Referrer-Policy, Permissions-Policy; score = passed/6. Final score = mean of whichever sub-checks ran.' },
   s2: { label: 'S2 auth',        group: 'Security',      desc: 'Auth-pattern scanner for AI-sitebuilder failures: Supabase service-role keys in client code, RLS disabled, JWT decode without verification, Firebase test mode, hardcoded admin emails/passwords. Severity-weighted; critical=10, high=5, medium=2 pts; decay to 0 at 20 pts. Source-only.' },
   s3: { label: 'S3 vulns',       group: 'Security',      desc: 'npm audit CVE count from the source lockfile. Weighted: critical×10 + high×3 + moderate×1 + low×0.1. Score decays to 0 at 20 weighted penalty points. Source-only.' },
+  s4: { label: 'S4 backend probes', group: 'Security',   desc: 'Backend track. Read-only runtime probes against the deployed backend: an unauthenticated GET on a protected endpoint (must be rejected) and a cross-user GET (user A must not be able to read user B\'s data — the canonical "RLS off" failure). Each failed probe = 10 penalty pts; decay to 0 at 20. N/A unless the submission carries a backend block and the prompt declares backend_probes. Additive within-dim weight.' },
   cost: { label: 'Cost',         group: 'Cost',          desc: 'Informational only — not included in composite score. Self-reported by user at submission: TTFR (time to first render), TTWB (time to working build), USD estimate.' },
 };
 

@@ -36,6 +36,8 @@ Cost is **informational by design, not folded into the composite.** This is a de
 
 Research has F3 (spec-based e2e tests) at 25% within Functional. F3 isn't implemented (app-track only), so its weight redistributes to F2 (+15%) and F6 (+10%) — the deterministic siblings.
 
+**Backend-track Functional scorers (additive, v0.3).** F7 (auth round-trip, weight 8) and F8 (cross-session persistence, weight 7) sit *on top of* the 100 above rather than carving into it. They return null on any submission without a `backend` block, so null-renormalization (below) divides only by the present scorers' weight-sum: Tier 1/2 submissions divide by 100 and score exactly as before, while Tier 3 backend submissions divide by 115 and reflow F7→7% / F8→6% with the others compressing proportionally. This is deliberately *not* the "narrow F2 for everyone" framing — only backend-bearing submissions see the expanded denominator.
+
 **Code Quality (18% of composite)** — sum to 100% within the dimension:
 
 | Scorer | Weight | Composite contribution |
@@ -69,6 +71,8 @@ Research has V3 (reference fidelity) at 10% and V5 (animation polish) at 5%. Nei
 | S1 secrets + headers | 40% | 4.4% |
 | S2 auth patterns | 35% | 3.85% |
 | S3 vuln audit | 25% | 2.75% |
+
+**Backend-track Security scorer (additive, v0.3).** S4 (backend security probes, weight 15) is additive on top of the 100 above, identical in mechanism to F7/F8: null on non-backend submissions (S1/S2/S3 keep their exact 40/35/25), and reflowing in at 15/115 ≈ 13% on backend submissions. S4's runtime probes complement rather than replace S1/S2/S3's code-pattern and dependency signals, so the dimension expands rather than reweighting.
 
 #### Renormalization on null scorers
 
@@ -184,29 +188,37 @@ F3 is therefore retired as a separate scorer. The `f3` ID will not be used. F2's
 
 ---
 
-### F7 — Auth round-trip (planned v0.3, backend track)
+### F7 — Auth round-trip (v0.3, backend track)
 
-**What it measures:** Whether the deployed backend correctly handles a complete auth lifecycle: sign up → log in → make a change → log out → log in again → confirm the change persists. Catches broken sessions, broken persistence, broken signup forms — failures that F2's single-session checks miss because they never re-authenticate.
+**File:** `src/scorers/functional/f7-auth-roundtrip.ts`
 
-**How (planned):** Requires a `signup_credentials` block in `submissions.yaml` (pre-seeded credentials or a documented signup flow) and a `seed_strategy` (`signup_each_run` vs. `pre_seeded`). The harness performs the auth lifecycle via Playwright, then checks state across the log-out / log-back-in boundary. No automated signup for tools that prohibit it (Lovable currently bans it) — sign-up is a documented manual step that produces credentials the harness reads.
+**What it measures:** Whether the deployed backend correctly handles a complete auth lifecycle: log in → create a record with a unique per-run marker → log out → log in again → confirm the record persists. Catches broken sessions, broken signup forms, and writes that don't actually persist server-side — failures that F2's single-session checks miss because they never re-authenticate.
 
-**Within-dimension weight (planned):** ~10% within Functional, sourced from F2 narrowing when the backend track ships. F2 contracts from 45% to roughly 30%; the freed weight redistributes across F7, F8, F9.
+**How:** Runs only when the submission carries a `backend` block with `signup_credentials`. The harness drives the deployed login form via Playwright (resilient email/password/submit heuristics — see `src/scorers/backend/login.ts`), creates a contact named after a unique marker (`F7_CONTACT_<run>_<rand>`), logs out via a log-out/sign-out control, re-navigates and logs in again, and asserts the marker is still visible. The unique marker means the persistence check can't pass on seed data. No automated signup for tools that prohibit it (Lovable bans it; see [[lovable-anti-automation]]) — accounts are supplied via `signup_credentials`, created manually.
 
-**N/A handling:** Frontend-only tools (Claude Artifacts, v0 deploys without Supabase) score N/A on F7. Tools that score N/A on F7/F8/S4 are honestly not in the same category as backend-shipping tools — that's the correct signal, not a penalty to game around. Weight redistributes within Functional per §"Renormalization on null scorers".
+**Scoring:** `passed` requires both record creation and post-relogin persistence. Partial credit = fraction of lifecycle steps that succeeded (so a tool that logs in but can't persist scores above zero but below pass).
+
+**Within-dimension weight:** 8, additive on top of the non-backend Functional scorers (which sum to 100). On non-backend submissions F7 is null and the others keep their exact prior proportions; on backend submissions F7 reflows in at 8/115 ≈ 7%.
+
+**N/A handling:** Frontend-only tools (Claude Artifacts, v0 deploys without a backend) and any submission without `signup_credentials` score N/A on F7 — weight redistributes within Functional per §"Renormalization on null scorers".
 
 ---
 
-### F8 — Backend persistence across sessions (planned v0.3, backend track)
+### F8 — Backend persistence across sessions (v0.3, backend track)
 
-**What it measures:** Whether state persists to a real backend, not just to localStorage. Create an entity in browser context A → open the same URL in a fresh incognito context B → log in → confirm the entity is there.
+**File:** `src/scorers/functional/f8-cross-session.ts`
 
-**How (planned):** Two browser contexts via Playwright. Context A authenticates, creates an entity, closes. Context B (fresh, no shared cookies/storage) reopens the deployed URL, authenticates with the same credentials, asserts the entity is visible. F8 cleanly distinguishes localStorage-only tools from real-backend tools — a distinction F2 alone can't make even with `setup` reload actions, because reload preserves localStorage.
+**What it measures:** Whether state persists to a real backend, not just to localStorage. Create a record in browser context A → open the same URL in a fresh incognito context B → log in → confirm the record is there.
 
-**Within-dimension weight (planned):** ~10% within Functional, sourced from F2 narrowing.
+**How:** Two browser contexts via Playwright. Context A (the main page) logs in and creates a contact with a unique marker. Context B — a fresh `browser.newContext()` with clean storage — reopens the deployed URL, logs in with the same credentials, and asserts the marker is visible. Because context B shares no cookies or localStorage with A, a localStorage-only app fails (B's storage is empty) while a real-backend app passes. This is the discriminator F2 alone can't make even with `setup` reload actions, because reload preserves localStorage.
 
-**Why this complements F7:** F7 confirms auth round-trip works within one browser session. F8 confirms persistence is server-side, not client-side. Together they verify the backend is real and stateful, not just a localStorage-backed simulation.
+**Scoring:** `passed` requires the record created in A to be visible in the fresh context B (`details.crossedSessions`). Partial credit = fraction of steps succeeded.
 
-**N/A handling:** Frontend-only tools score N/A. Tools shipping localStorage-only persistence (the v0.2 reference `todo-localstorage` prompt is one) will fail F8 by design — that's the correct signal.
+**Within-dimension weight:** 7, additive (reflows in at 7/115 ≈ 6% on backend submissions; null otherwise).
+
+**Why this complements F7:** F7 confirms auth round-trip works within one browser session. F8 confirms persistence is server-side, not client-side. Together they verify the backend is real and stateful, not a localStorage-backed simulation.
+
+**N/A handling:** Frontend-only tools score N/A. Tools shipping localStorage-only persistence (the `todo-localstorage` prompt is one) would fail F8 by design — that's the correct signal.
 
 ---
 
@@ -704,18 +716,27 @@ Either sub-check is N/A when its input is missing (no source ZIP for secrets, or
 
 ---
 
-### S4 — Backend security probes (planned v0.3, backend track)
+### S4 — Backend security probes (v0.3, backend track)
 
-**What it measures:** Direct API probes against the deployed backend that catch the actual server-side auth-bypass and authorization failures that S2 only catches via *client-side* hints.
+**File:** `src/scorers/security/s4-backend.ts`
 
-**How (planned):** Two probe classes per prompt, declared in the prompt's acceptance YAML:
+**What it measures:** Read-only runtime probes against the deployed backend that catch the actual server-side authorization failures that S2 only catches via *client-side* hints.
 
-- **Unauthenticated GET** on a contact-detail / user-data endpoint that should require auth → expect 401/403, fail if 200
-- **Cross-user GET** — authenticate as user A, attempt to read user B's data via direct API call → expect 403, fail if 200 with B's data
+**How (v0.2.0 — credential-only auto-discovery):** Runs only when the submission carries a `backend` block with two accounts. The **only** input is credentials — no tokens, endpoints, or record ids supplied by hand. The harness:
 
-Probes are read-only and do not mutate the tool's database. Built on top of the same `signup_credentials` / `seed_strategy` infrastructure as F7 and F8.
+1. signs in as **user B** through the real login form (the shared browser driver, `src/scorers/backend/login.ts`), **seeds a uniquely-marked record as B**, then observes B's dashboard traffic — auto-selecting the JSON response (GET *or* POST/RPC) that returns the largest record array and using the seed marker as the leak identifier;
+2. **unauth probe** — replays B's request with embedded auth **stripped** (token keys removed from the JSON body, Authorization header dropped) from a session-less context → must be rejected (401/403) and must not serve B's data;
+3. **cross-user probe** — signs in as **user A**, captures **A's own** dashboard data response, and checks whether B's marker appears in it → A's own data must **not** contain B's record.
 
-**Within-Security weight (planned):** TBD on ship — likely sourced as additive (the security dimension expands rather than reweighting existing scorers), since S1/S2/S3 cover code-pattern and dependency-vuln signals that S4's runtime probes complement rather than replace.
+**Critical correctness detail (auth-in-body):** the cross-user probe uses A's *own* request, not a replay of B's captured request. Many backends (Modelence, tRPC) carry the auth token in the request **body**, not a cookie — so replaying B's captured request "from A's context" stays authenticated as B and returns B's data, producing a false-positive leak. Testing against A's own authenticated response is correct regardless of where auth travels. Likewise the unauth probe must strip the body token, not merely drop cookies. (This was a real false-positive bug caught against the Modelence reference CRM and fixed in `0.2.0`.)
+
+Capturing POST as well as GET is required for RPC/GraphQL backends (e.g. Modelence's `POST /api/_internal/method/contacts.list`), which a GET-only capture would miss. A probe that errors (timeout / refused / login failure) is recorded as inconclusive, not a failure. The artifact records only the redacted per-probe outcome and the discovered endpoint URL — never response bodies. **S4 writes one record (B's seeded contact)** to guarantee a discoverable target — otherwise non-destructive (no deletes, no writes as A).
+
+**Scope boundary:** the cross-user probe tests *list/collection* endpoints ("does A's list contain B's rows?"), which catches the dominant "endpoint returns every user's records" failure. It does **not** probe per-record detail endpoints (`GET /contacts/<B's id>` as A) — that narrower IDOR class would need per-record id probing and is not yet covered.
+
+**Scoring:** each failed probe = 10 penalty points (both failure classes are direct data exposure = critical); `score = max(0, 1 − penalty/20)`; `passed = no failed probes`. `details.crossTenantLeak` is the headline boolean.
+
+**Within-Security weight:** 15, additive on top of S1/S2/S3 (which sum to 100 = 40/35/25). On non-backend submissions S4 is null and S1/S2/S3 keep their exact prior proportions; on backend submissions S4 reflows in at 15/115 ≈ 13%.
 
 **Why this is the single biggest security signal-quality win in v0.3:** S2 catches code patterns that *suggest* auth is broken (Supabase service-role key in client code, JWT decode without verify, RLS-off schema files committed). S4 catches the actual server-side failure — the canonical "Supabase RLS off, every user can read every other user's data" bug that's invisible from the frontend until someone tries it.
 
@@ -829,6 +850,8 @@ These are research positions tracked here so they don't get re-debated. None are
 | f4 | `functional/f4-judge.ts` | 0.2.0 | Single judge; 4 default criteria + per-prompt `functional_checklist.extra`; missing-features list |
 | f5 | `functional/f5-errors.ts` | 0.1.0 | Linear decay at 10 errors |
 | f6 | `functional/f6-verbatim.ts` | 0.1.0 | exact_copy, hex_value, structural types |
+| f7 | `functional/f7-auth-roundtrip.ts` | 0.1.0 | Backend track. login → create → logout → relogin → persists. N/A without `backend.signup_credentials`. Additive weight 8 |
+| f8 | `functional/f8-cross-session.ts` | 0.1.0 | Backend track. Record created in context A must appear in fresh incognito context B (real backend vs. localStorage). Additive weight 7 |
 | c1 | `code-quality/c1-eslint.ts` | 0.1.0 | typescript-eslint recommended only |
 | c2 | `code-quality/c2-types.ts` | 0.1.0 | tsc strict; ignores missing-module errors |
 | c3 | `code-quality/c3-axe.ts` | 0.1.0 | wcag2a/aa, wcag21a/aa, wcag22aa tags |
@@ -844,4 +867,5 @@ These are research positions tracked here so they don't get re-debated. None are
 | s1 | `security/s1-secrets.ts` | 0.3.0 | Two sub-checks: source secrets (regex + Semgrep `p/secrets`+`p/owasp-top-ten` if installed + trufflehog filesystem if installed; findings unioned) + 6-header deployed audit; mean of whichever ran |
 | s2 | `security/s2-auth.ts` | 0.2.0 | 16 patterns; client-side awareness; weighted severity. v0.2.0 added secure-by-default patterns: `xss_unsanitized_html` (high), `insecure_transport` (medium), `sensitive_data_logged` (medium) |
 | s3 | `security/s3-vuln.ts` | 0.1.2 | npm audit; critical=10, high=3, moderate=1, low=0.1 penalty |
+| s4 | `security/s4-backend.ts` | 0.2.0 | Backend track. Credential-only: signs in as B via the UI, auto-discovers B's data endpoint, replays it unauthenticated + as A. `cross_tenant_leak` headline. N/A without a `backend` block. Additive weight 15 |
 | cost | `cost.ts` | 0.1.0 | Self-reported; informational only |
