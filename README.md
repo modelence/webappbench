@@ -187,7 +187,7 @@ Optional fields:
 - `visual_checklist.extra[]` — per-prompt criteria added to V1's default rubric.
 - `visual_checklist.placeholder_copy` — set `true` to skip V1's 3 copy-quality defaults when the prompt explicitly invites placeholder content (e.g., a todo app prompt that asks for sample tasks).
 - `functional_checklist.extra[]` — per-prompt criteria added to F4's default rubric.
-- `backend_probes[]` — read-only backend security probes for Tier 3 backend-bearing prompts (consumed by the planned S4 scorer). Each is `{ kind, id, path, expect_status }` where `kind` is `unauth_get` (GET a protected endpoint with no auth → expect 401/403) or `cross_user_get` (GET user B's resource while authed as user A → expect rejection; adds `forbid_body_contains`, a synthetic marker that must be absent). Requires the submission to carry a `backend` block (`backend_url` + `signup_credentials` + `seed_strategy` + `seed_records`); see `submissions.example.yaml`. Schema-only as of v0.2.x — no scorer consumes it yet.
+- `backend_probes[]` — read-only backend security probes for Tier 3 backend-bearing prompts (consumed by S4). Each is `{ kind, id, path, expect_status }` where `kind` is `unauth_get` (GET a protected endpoint with no auth → expect 401/403) or `cross_user_get` (GET user B's resource while authed as user A → expect rejection; adds `forbid_body_contains`, a synthetic marker that must be absent). Requires the submission to carry a `backend` block (`backend_url` + `signup_credentials` + `seed_strategy` + `seed_records`); see `submissions.example.yaml`.
 
 ### Acceptance criteria
 
@@ -258,10 +258,11 @@ src/
   core/                  # Types, submission schema, artifact writers
   prompts/               # Zod validator + YAML loader
   scorers/
-    functional/          # f1, f2, f4, f5, f6
+    functional/          # f1, f2, f4, f5, f6, f7, f8
     code-quality/        # c1, c2, c3, c4, c5, c6, c7, c8, c9
     visual/              # v1, v2, v4
-    security/            # s1, s2, s3, external-scanners (Semgrep + trufflehog wrappers)
+    security/            # s1, s2, s3, s4, external-scanners (Semgrep + trufflehog wrappers)
+    backend/             # login.ts (form heuristics), auth.ts (token capture + replay)
     cost.ts              # User-reported timing
     composite.ts         # Weighted composite + per-dimension breakdown
     orchestrate.ts       # Single submission → all scorers
@@ -271,7 +272,7 @@ src/
   report/generate.ts     # JSON artifacts → static HTML leaderboard
   cli.ts                 # Commander entrypoint
 prompts/
-  corpus/                # Active corpus — Tier 1 landing, Tier 2 localStorage app, Tier 3 backend CRM (auth + per-user isolation; backend scorers land in v0.3)
+  corpus/                # Active corpus — Tier 1 landing, Tier 2 localStorage app, Tier 3 backend CRM (auth + per-user isolation; F7/F8/S4 backend scorers)
   landing-extra/         # Archived v0.1 landing prompts; load with --corpus prompts/landing-extra for ad-hoc runs
 artifacts/               # .gitignored — scored runs land here
 METRICS.md               # Full per-scorer documentation, weights, rationale
@@ -280,12 +281,12 @@ ROADMAP.md               # Shipped vs planned per release
 
 ## Caveats
 
-- **Self-reported timing.** TTFR / TTWB / cost are user-entered. Instrumented timing returns in v0.3 via automated-mode adapters for tools with APIs (v0 Platform API, bolt.diy Docker, Anthropic Messages API).
+- **Self-reported timing.** TTFR / TTWB / cost are user-entered. Instrumented timing is planned for a future release via automated-mode adapters for tools with APIs.
 - **URL rot.** Preview URLs expire. Scores are snapshotted at submit time; re-scoring later may diverge.
 - **What the tool publishes is what gets scored.** Some tools render differently in their in-editor preview than at the deployed URL. The deployed URL is what ships to users, so that's the score that counts.
 - **Do not automate sitebuilder UIs.** Playwright-driven sign-in gets accounts banned. Submission is manual by design.
-- **Single-judge bias on V1/F4/C7.** All three judge scorers currently use one model from one provider, which inflates scores when the tool's backing LLM matches the judge's family. Cross-family dual-judge protocol is planned for v0.3.
-- **Backend correctness, auth, and server-side security are out of scope for v0.2.** The current corpus is one landing page (Tier 1) + one localStorage-only app (Tier 2). A backend-bearing CRM (Tier 3) plus three new scorers (F7 auth round-trip, F8 cross-session backend persistence, S4 backend security probes for the canonical Supabase-RLS-off failure) land in v0.3. Tools that ship a real backend natively (Lovable, Replit Agent) and tools that don't (Claude Artifacts, frontend-only v0) score the same in v0.2 — that's an honest scope limitation, not a measurement claim.
+- **Single-judge bias on V1/F4/C7.** All three judge scorers currently use one model from one provider, which inflates scores when the tool's backing LLM matches the judge's family. Cross-family dual-judge protocol is planned for v0.4.
+- **Backend-track scorers (F7/F8/S4) are Tier 3 only.** Tools that don't ship a real backend score N/A on these three scorers; null-renormalization preserves their composite proportions exactly (see METRICS.md § "Backend-track scorers (additive)").
 
 ## License
 

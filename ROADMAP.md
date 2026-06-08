@@ -189,6 +189,58 @@ C7's LLM rubric currently spans naming, separation of concerns, component reuse,
 
 ---
 
+## v0.4 — Deep backend correctness, RBAC, and API security
+
+Focus: extend backend testing from "does it work?" (v0.3) to "does it work *correctly and securely* under adversarial conditions?". Three themes: (1) request-interception layer that enables token replay and cross-user API probes without UI heuristics; (2) a role-bearing corpus prompt that unlocks RBAC testing; (3) data-integrity and contract-validation scorers that close the silent-failure gap. This is the largest security-depth expansion on the roadmap.
+
+### Request interception layer (prerequisite for most v0.4 scorers)
+
+All v0.3 scorers drive the app exclusively through the UI and infer backend behavior from DOM changes. v0.4 adds a thin interception layer to `auth.ts` / `orchestrate.ts` that captures session tokens and raw request/response bodies during a Playwright run, then replays modified requests directly against the API. This is the architectural step v0.3 deliberately deferred.
+
+- 📋 Session-token capture: extract the live auth credential (cookie, `Authorization` header, or localStorage `access_token`) at the moment the dashboard first loads, after a successful login
+- 📋 Raw request body capture for write endpoints: record the exact body format (JSON, form-encoded, GraphQL mutation) of create/update/delete operations as the harness drives them, so replay probes use the real shape
+- 📋 Replay helper: `replayAs(token, method, url, body)` — issues a fetch with the supplied token, returns `{ status, body }`; used by S4-extension scorers and the new F9/F10 scorers below
+
+### New corpus prompt: role-bearing app (prerequisite for RBAC scorers)
+
+The `crm-contacts` prompt has only one role (authenticated user). RBAC testing requires a prompt with at least two roles.
+
+- 📋 **Tier 3 role-bearing prompt** — e.g. "Team Notes" or "Project Board": org owner + member roles. Owner can invite members, delete any item in the org; members can create and edit their own items only. Declares `roles` block in the submission YAML (`owner_a`, `member_b`). Acceptance criteria cover: member cannot delete owner's items, member cannot access admin/settings routes, owner can see all members' items.
+
+### Backend functional scorers (new)
+
+- 📋 **F9** delete correctness — drive the UI delete control on a known marker record; reload as the same user; assert the record is gone. Then attempt to replay the delete request as a *different* user (using the replay helper) and assert rejection (403/404) + record still present for the original owner. Closes the "cross-user delete" gap: the prompt requires server-side enforcement but nothing in v0.3 tests it at runtime.
+- 📋 **F10** write-operation error handling — POST a contact with a missing required field (blank name), oversized field (>10k chars), and duplicate-natural-key where applicable; assert each returns a structured 4xx (not 200, not 500) and no record is created. Tests that the backend validates inputs rather than silently accepting or crashing. N/A for prompts that do not declare `error_cases` in their acceptance YAML.
+- 📋 **F11** list ordering — create two records with known markers in sequence; reload; assert the DOM order matches newest-first (or the order declared in the prompt). Catches tools that return records in insertion order from the DB but reverse them client-side, breaking on reload.
+
+### Server-side logout validation (F7 extension)
+
+- 📋 **F7 v0.2**: after logout, replay the pre-logout session token against the data endpoint using the replay helper; assert the response is 401/403. Catches tools that only clear client state (localStorage/cookie) without invalidating the session server-side. Stored in F7's step list as `server_side_logout_invalidation`; scored as a 7th step.
+
+### API security scorers (S4 extensions + new)
+
+- 📋 **S4 v0.2 — IDOR detail probe**: S4 already discovers user B's record ID via `extractIdentifier`. Add a second probe: replay `GET /contacts/<B_id>` and `DELETE /contacts/<B_id>` as user A (using the replay helper); assert both return 4xx and the record survives. Closes S4's own documented scope gap (list-only vs. per-record endpoints).
+- 📋 **S4 v0.2 — Mass-assignment probe**: replay the captured create-contact request body with injected fields (`"userId": B_id`, `"role": "admin"`, `"id": "<forced>"`) as user A; assert the response does not reflect the injected ownership, and B's account is unaffected. Uses the captured request body format so the probe matches the real API shape.
+- 📋 **S5** RBAC enforcement (role-bearing prompt only) — using the role-bearing corpus prompt and the two credential pairs (`owner_a`, `member_b`): (1) member attempts to hit owner-only routes/mutations declared in the prompt's `rbac_boundaries`; assert 403. (2) Vertical escalation: member replays owner-level request body; assert rejection. (3) Field-level: assert member's list response does not contain other members' private fields. N/A on non-role-bearing prompts.
+- 📋 **S6** rate-limiting probe — fire N rapid identical requests (default: 20 in 5s) at the login endpoint and at the primary write endpoint; assert at least one 429 (or equivalent backoff signal) appears within the burst. Not a pass/fail gate — scores 1.0 if any 429 observed, 0.5 if requests slow down detectably but no 429, 0.0 if all succeed at full speed. N/A on static/frontend-only submissions.
+
+### Data integrity (new)
+
+- 📋 **F12** unique-constraint enforcement — create a contact with a natural key (e.g. email address); attempt to create a second with the identical key; assert the second request returns 4xx and only one record exists in the list. Requires the prompt to declare `unique_fields`. Tests that the backend enforces uniqueness server-side, not just client-side form validation.
+- 📋 **C12** schema-design quality (promoted from v0.3 📋, same spec) — ~12 deterministic patterns over emitted schema files (Prisma, Drizzle, raw SQL, Supabase migrations): FK constraints, NOT NULL on identity columns, FK-column indexes, `created_at`/`updated_at` timestamps, unique constraints on natural keys, RLS policies on user-scoped tables (Supabase), absence of JSON blobs where joins are appropriate, consistent `ON DELETE` behavior. Source-only; N/A without source ZIP.
+
+### Frontend↔backend contract (new)
+
+- 📋 **F13** API response contract — using the replay helper, fetch the authenticated data endpoint and Zod-validate the response against a per-prompt `response_schema` declared in the prompt YAML (field names, types, required fields). Assert that every field the UI is expected to render (from the prompt's acceptance criteria) is present in the response with the correct type. Catches tools that hardcode/mock data the backend doesn't actually serve, and detects silent field-name mismatches.
+
+### Composite weight additions
+
+F9–F13 and S5–S6 follow the same additive model as F7/F8/S4: non-backend submissions score null and null-renormalization preserves existing proportions exactly. Role-bearing-prompt scorers (S5) are additionally null on non-role submissions.
+
+Provisional additive weights (within-dimension): F9 6, F10 4, F11 3, F12 3, F13 4 (Functional total +20); S5 12, S6 8 (Security total +20). Final weights set at ship time after calibration against ≥3 submissions.
+
+---
+
 ## Deferred indefinitely
 
 Items the research design explicitly de-prioritizes or that don't pay back the implementation cost. Not committed to any release.

@@ -150,9 +150,9 @@ F3 is therefore retired as a separate scorer. The `f3` ID will not be used. F2's
 
 **Why this complements F2:** F2 confirms specific elements exist via locators. F4 catches the broader class of failure where each individual element is present but the page as a whole has drifted from the prompt's intent — generic placeholder copy, missing or stubbed features, sections that don't match the described product.
 
-**Gap vs research:** Single judge only; cross-family dual-judge protocol deferred to v0.3 along with V1's.
+**Gap vs research:** Single judge only; cross-family dual-judge protocol deferred to v0.4 along with V1's.
 
-**Recommended change (v0.3):** Promote to dual cross-family judges, sharing the V1 second-judge rollout.
+**Recommended change (v0.4):** Promote to dual cross-family judges, sharing the V1 second-judge rollout.
 
 ---
 
@@ -222,7 +222,7 @@ F3 is therefore retired as a separate scorer. The `f3` ID will not be used. F2's
 
 ---
 
-### F9 — Scheduled-job execution (planned v0.3, backend track)
+### F9 — Scheduled-job execution (planned v0.4, backend track)
 
 **What it measures:** For prompts whose acceptance YAML requires a working scheduled job (e.g., "expense tracker with weekly summary email," "task app with overdue-task auto-reminder"), whether the tool wired up working cron / scheduled-work and whether that work actually runs and produces the expected side effect.
 
@@ -352,9 +352,9 @@ The force-trigger endpoint is mandatory in F9-bearing prompts so the harness doe
 
 **Within-dimension weight (research):** 15% of Code Quality.
 
-**Gap vs research:** Single judge only; cross-family dual-judge protocol deferred to v0.3 along with V1's. Sampling is heuristic (path-tier sort by file size) rather than diversity-weighted; could miss representative files in unusual project structures.
+**Gap vs research:** Single judge only; cross-family dual-judge protocol deferred to v0.4 along with V1's. Sampling is heuristic (path-tier sort by file size) rather than diversity-weighted; could miss representative files in unusual project structures.
 
-**Recommended change (v0.3):** Promote to dual cross-family judges, sharing the V1 second-judge rollout. Consider AST-based file scoring (component count, prop interfaces detected) to drive sampling instead of path heuristics.
+**Recommended change (v0.4):** Promote to dual cross-family judges, sharing the V1 second-judge rollout. Consider AST-based file scoring (component count, prop interfaces detected) to drive sampling instead of path heuristics.
 
 ---
 
@@ -402,7 +402,7 @@ Score = passed / total applicable checks.
 
 ---
 
-### C10 — Project structure (planned v0.3)
+### C10 — Project structure (planned v0.4)
 
 **What it measures:** Deterministic AST + filesystem inspection for framework anti-patterns that catch concrete failure modes the LLM judge (C7) catches inconsistently and ESLint (C1) doesn't catch at all.
 
@@ -415,7 +415,7 @@ Score = passed / total applicable checks.
 
 **Within-dimension weight (planned):** ~5–8% within Code Quality, sourced from C7 narrowing. C7's LLM rubric was previously asked to cover architecture by judgment alone; moving project-structure checks to a deterministic backbone lets C7 contract to its core "appropriateness of abstraction boundaries / prop-typing quality / pattern consistency" scope.
 
-**Promotion rationale:** Promoted from 💡 design-only to 📋 v0.3 because it addresses a class of failure (server-only imports in client files, db calls in render paths) that produces real runtime / hydration errors and is invisible to lint.
+**Promotion rationale:** Promoted from 💡 design-only to 📋 v0.4 because it addresses a class of failure (server-only imports in client files, db calls in render paths) that produces real runtime / hydration errors and is invisible to lint.
 
 **Gap vs research:** Patterns are framework-specific — Next.js + Vite-React covered first, other frameworks ship as adapters land.
 
@@ -431,11 +431,11 @@ Score = passed / total applicable checks.
 - **Function and file length distribution** — median and 90th-percentile function/file length scored against explicit anchors
 - **Comment density and quality** — comment-to-code ratio penalty for both <2% and >25%; detection of filler comments (`// imports`, `// state`, `// render`) via regex
 
-**Why held at 💡:** Promotion to the roadmap requires a research call on whether the signal beyond C1 (lint) plus C7's v0.3 dual-judge upgrade is worth a separate scorer. The dual-judge protocol may close enough of the readability variance gap to make C11 redundant. The decision lands after C7 dual-judge ships and we measure the residual variance.
+**Why held at 💡:** Promotion to the roadmap requires a research call on whether the signal beyond C1 (lint) plus C7's v0.4 dual-judge upgrade is worth a separate scorer. The dual-judge protocol may close enough of the readability variance gap to make C11 redundant. The decision lands after C7 dual-judge ships and we measure the residual variance.
 
 ---
 
-### C12 — Schema design quality (planned v0.3, app track only)
+### C12 — Schema design quality (planned v0.4, app track only)
 
 **What it measures:** Deterministic checks on emitted database schemas (Prisma, Drizzle, raw SQL migrations, Supabase schema files). Catches schema rot — the most expensive AI-tool failure mode, because users discover it months in, after lock-in.
 
@@ -454,7 +454,7 @@ Adapts ProjDevBench's "system architecture" evaluation axis into deterministic c
 
 **Within-dimension weight (planned):** ~6–8% within Code Quality, sourced from C7 narrowing alongside C10.
 
-**Why this is the highest-value v0.3 code-quality addition:** schema rot is invisible to F7/F8/S4 — those test that the backend *works*, not that the schema is *reasonable*. A tool can pass auth round-trip, pass cross-session persistence, pass RLS probes, and still ship a schema with no foreign keys, no indexes, JSON-blob columns where a join would be appropriate, and inconsistent on-delete behavior. C12 catches that.
+**Why this is the highest-value v0.4 code-quality addition:** schema rot is invisible to F7/F8/S4 — those test that the backend *works*, not that the schema is *reasonable*. A tool can pass auth round-trip, pass cross-session persistence, pass RLS probes, and still ship a schema with no foreign keys, no indexes, JSON-blob columns where a join would be appropriate, and inconsistent on-delete behavior. C12 catches that.
 
 **N/A handling:** Tools without a schema file (frontend-only deploys, Claude Artifacts) score N/A — same handling as F7/F8/S4. Patterns will need quarterly refresh as Drizzle / Prisma / Supabase / Convex idioms evolve; budget into the same maintenance cycle as S2 auth-pattern refresh.
 
@@ -502,7 +502,7 @@ See `prompts/corpus/saas-pricing-page.yaml` for a worked example.
 2. **Disagreement handling** — when two judges disagree >1 point on any criterion, flag for manual review or a third judge. **Not applicable until dual-judge ships.**
 3. **Krippendorff's α calibration** — target α ≥ 0.67 (tentative reliability) against a 50-example human-rated calibration set. **Not implemented.**
 
-**Recommended change (v0.3):** Add second judge from a different model family. Add disagreement flagging logic. Build the calibration corpus.
+**Recommended change (v0.4):** Add second judge from a different model family. Add disagreement flagging logic. Build the calibration corpus.
 
 ---
 
@@ -793,24 +793,32 @@ When activated, the pairwise score becomes the primary ranking; absolute 0–100
 | Default empty-state critical criterion for app-track prompts | Catches the most common app-track regression: blank pane on zero records |
 | Route-split count + license-hygiene scan in C5 | Closes the remaining sub-checks from research C5 not covered by gzipped payload alone |
 
-### v0.3 priority changes
+### v0.3 shipped changes
 
 | Change | Impact |
 |---|---|
-| **Backend track infrastructure** — `backend_url` / `signup_credentials` / `seed_strategy` in `submissions.yaml` | Enables F7/F8/F9/S4. Submission-flow precondition for the rest of this row block |
-| **F7 auth round-trip** | Tests sign-up → log-in → state-change → log-out → log-in-again persistence. Catches broken sessions, broken signup forms |
+| **Backend track infrastructure** — `backend_url` / `signup_credentials` / `seed_strategy` in `submissions.yaml` | Enables F7/F8/S4. Submission-flow precondition for the backend track |
+| **F7 auth round-trip** | Login → create a marked record → logout → re-login → record persists. Catches broken sessions and writes that don't persist server-side |
 | **F8 backend persistence across sessions** | Two-context test distinguishing localStorage tools from real-backend tools |
+| **S4 backend security probes** | Direct API probes (unauthenticated GET, cross-user GET) catch the canonical "RLS off" failure that S2 only catches via client-side hints |
+| **Tier 3 corpus prompt** (`crm-contacts`) | Multi-user CRM — email/password auth, per-user contact lists, server-side data isolation |
+| **Authenticated dashboard screenshots** for F4/V1 | Backend apps now capture `dashboard.png` / `dashboard-mobile.png` after login so judges see the real UI, not the login screen |
+| **F2 within-dim weight additive model** | F7/F8 sit on top of the 100-point base; Tier 1/2 submissions score exactly as before |
+| **Fix-report / audit.md generation** | Per-submission markdown audit report listing failing scorers and actionable notes |
+
+### v0.4 planned changes
+
+| Change | Impact |
+|---|---|
 | **F9 scheduled-job execution** | Verifies cron / scheduled work both exists (config present) and runs (force-trigger endpoint produces side effects). Currently unscored anywhere |
-| **S4 backend security probes** | Direct API probes (unauthenticated GET, cross-user GET) catch the canonical "Supabase RLS off" failure that S2 only catches via client-side hints. Single biggest *security* signal-quality win in v0.3 |
 | **C10 project-structure deterministic checks** | Catches framework anti-patterns (server-only imports in `'use client'` files, db calls in render paths) — invisible to lint |
 | **C12 schema-design deterministic checks (app track)** | Catches schema rot (missing FKs, no indexes, RLS off, all-nullable columns) — invisible to F7/F8/S4 which only test the backend works, not whether schema is reasonable |
-| **F2 within-dim weight reflow** when F7/F8/F9 ship (45% → ~30%) | Documented v0.3 weighting change; freed weight redistributes across F7 (~10%), F8 (~10%), F9 (~5–10% on prompts that exercise scheduled work) |
 | **C7 within-dim weight narrows** when C10/C12 ship | Architecture and schema move to deterministic backbones; C7 contracts to its core "abstraction boundaries / prop-typing / pattern consistency" scope |
 | Add second judge from a different model family across V1, F4, and C7 | Eliminates self-preference bias; one rollout covers all three judge scorers |
 | Add disagreement flagging logic (>1 point divergence) for the dual-judge scorers | Surfaces low-confidence judgments for manual review |
 | Add dynamic per-prompt F1 timeout from `baselineBuildSeconds` in prompt YAML | Prevents false-positive timeouts on complex prompts |
-| Implement V3 reference-design fidelity (CLIP + Block-Match + Text + Position + Color) | Enables reference-image prompts (Tier 3 "make it look like Linear") |
-| Add typographic hierarchy and color count/harmony to V2 | Remaining V2 gaps after the v0.2 CSS-signal additions; covers typographic depth and palette harmony |
+| Implement V3 reference-design fidelity (CLIP + Block-Match + Text + Position + Color) | Enables reference-image prompts ("make it look like Linear") |
+| Add typographic hierarchy and color count/harmony to V2 | Remaining V2 gaps after the v0.2 CSS-signal additions |
 | Implement harness-instrumented timing layer (replaces self-reported cost) | Enables automated leaderboard refreshes without manual timing input |
 | Krippendorff's α calibration pipeline for V1, F4, and C7 | Validates judge reliability against human ratings |
 | Duplication detection (`jscpd`) in C6 | Completes AST complexity sub-checks |
@@ -823,7 +831,7 @@ These are research positions tracked here so they don't get re-debated. None are
 
 | Item | Status reason |
 |---|---|
-| **C11 readability (deterministic anchors)** | Held until v0.3 dual-judge upgrade for C7 ships; dual-judge may close enough of the readability variance gap to make C11 redundant |
+| **C11 readability (deterministic anchors)** | Held until v0.4 dual-judge upgrade for C7 ships; dual-judge may close enough of the readability variance gap to make C11 redundant |
 | **§"Auto-retirement of saturated prompts"** | Requires sustained quarterly leaderboard runs that don't exist yet. Revisit after v0.3 has 2+ quarterly refreshes on record |
 | **§"Hard Mode subset"** | Same baseline-data prerequisite as auto-retirement |
 | **§"Pairwise Bradley–Terry fallback"** | Third line of defense after auto-retirement and Hard Mode; only fires when those two stop being enough. Deferred until the leaderboard has >12 months of data and saturation is genuinely visible |
