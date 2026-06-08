@@ -13,6 +13,7 @@ import { extractZip } from './extract.ts';
 import { loadPrompt } from '../prompts/schema.ts';
 import { TOOL_NAME_PATTERN } from './types.ts';
 import { isoWeek } from './version.ts';
+import { backendConfigSchema, type BackendConfig } from './backend.ts';
 import type { Prompt, ToolName, UserReportedCost, UserReportedTiming } from './types.ts';
 
 export const submissionSchema = z.object({
@@ -36,6 +37,9 @@ export const submissionSchema = z.object({
       notes: z.string().optional(),
     })
     .optional(),
+  // Backend-track contract (v0.3). Absent ⇒ backend-track scorers (F7/F8/S4) are
+  // N/A. See core/backend.ts and docs/s4-backend-security-plan.md.
+  backend: backendConfigSchema.optional(),
 });
 
 export type Submission = z.infer<typeof submissionSchema>;
@@ -53,6 +57,7 @@ export interface SubmissionInit {
   artifactUrl: string;
   userReportedTiming?: UserReportedTiming;
   userReportedCost?: UserReportedCost;
+  backend?: BackendConfig;
 }
 
 export function buildSubmission(init: SubmissionInit): Submission {
@@ -65,6 +70,7 @@ export function buildSubmission(init: SubmissionInit): Submission {
     submittedAt: new Date().toISOString(),
     userReportedTiming: init.userReportedTiming,
     userReportedCost: init.userReportedCost,
+    backend: init.backend,
   });
 }
 
@@ -77,6 +83,7 @@ export interface CreateSubmissionOptions {
   toolVersion?: string;
   timing?: UserReportedTiming;
   cost?: UserReportedCost;
+  backend?: BackendConfig;
   corpusDir: string;
   artifactsRoot: string;
 }
@@ -99,6 +106,7 @@ export async function createSubmissionArtifact(
     artifactUrl: opts.url,
     userReportedTiming: opts.timing,
     userReportedCost: opts.cost,
+    backend: opts.backend,
   });
   const paths = artifactPaths(
     opts.artifactsRoot,

@@ -2,6 +2,24 @@ import { readFile } from 'node:fs/promises';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import { TOOL_NAME_PATTERN } from './types.ts';
+import type { BackendConfig } from './backend.ts';
+
+// Backend-track block in submissions.yaml (snake_case YAML). Normalized to the
+// camelCase BackendConfig in core/backend.ts via backendFromEntry below. Absent
+// ⇒ backend-track scorers (F7/F8/S4) are N/A. The only required inputs are two
+// test accounts; everything else is discovered by the harness at runtime.
+const accountYamlSchema = z.object({
+  email: z.string().min(1),
+  password: z.string().min(1),
+});
+
+const backendYamlSchema = z.object({
+  user_a: accountYamlSchema,
+  user_b: accountYamlSchema,
+  backend_url: z.string().url().optional(),
+});
+
+type BackendYaml = z.infer<typeof backendYamlSchema>;
 
 const entrySchema = z.object({
   tool: z.string().regex(TOOL_NAME_PATTERN, 'tool must be lowercase kebab-case'),
@@ -16,7 +34,19 @@ const entrySchema = z.object({
   credits: z.number().nonnegative().optional(),
   usd: z.number().nonnegative().optional(),
   note: z.string().optional(),
+  backend: backendYamlSchema.optional(),
 });
+
+// Normalize the snake_case YAML backend block to the camelCase BackendConfig.
+export function backendFromEntry(entry: SubmissionConfigEntry): BackendConfig | undefined {
+  const b: BackendYaml | undefined = entry.backend;
+  if (!b) return undefined;
+  return {
+    userA: b.user_a,
+    userB: b.user_b,
+    ...(b.backend_url ? { backendUrl: b.backend_url } : {}),
+  };
+}
 
 export type SubmissionConfigEntry = z.infer<typeof entrySchema>;
 

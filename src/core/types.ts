@@ -1,3 +1,5 @@
+import type { BackendProbe } from './backend.ts';
+
 export type ToolName = string;
 
 export const TOOL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
@@ -12,6 +14,9 @@ export interface Prompt {
   seoApplicable: SeoCheck[];
   visualChecklist: ChecklistConfig;
   functionalChecklist: ChecklistConfig;
+  // Read-only backend security probes (Tier 3 backend track). Empty for prompts
+  // that declare none. Consumed by the planned S4 scorer.
+  backendProbes: BackendProbe[];
 }
 
 export interface ChecklistConfig {

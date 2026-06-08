@@ -36,6 +36,8 @@ Cost is **informational by design, not folded into the composite.** This is a de
 
 Research has F3 (spec-based e2e tests) at 25% within Functional. F3 isn't implemented (app-track only), so its weight redistributes to F2 (+15%) and F6 (+10%) — the deterministic siblings.
 
+**Backend-track Functional scorers (additive, v0.3).** F7 (auth round-trip, weight 8) and F8 (cross-session persistence, weight 7) sit *on top of* the 100 above rather than carving into it. They return null on any submission without a `backend` block, so null-renormalization (below) divides only by the present scorers' weight-sum: Tier 1/2 submissions divide by 100 and score exactly as before, while Tier 3 backend submissions divide by 115 and reflow F7→7% / F8→6% with the others compressing proportionally. This is deliberately *not* the "narrow F2 for everyone" framing — only backend-bearing submissions see the expanded denominator.
+
 **Code Quality (18% of composite)** — sum to 100% within the dimension:
 
 | Scorer | Weight | Composite contribution |
@@ -69,6 +71,8 @@ Research has V3 (reference fidelity) at 10% and V5 (animation polish) at 5%. Nei
 | S1 secrets + headers | 40% | 4.4% |
 | S2 auth patterns | 35% | 3.85% |
 | S3 vuln audit | 25% | 2.75% |
+
+**Backend-track Security scorer (additive, v0.3).** S4 (backend security probes, weight 15) is additive on top of the 100 above, identical in mechanism to F7/F8: null on non-backend submissions (S1/S2/S3 keep their exact 40/35/25), and reflowing in at 15/115 ≈ 13% on backend submissions. S4's runtime probes complement rather than replace S1/S2/S3's code-pattern and dependency signals, so the dimension expands rather than reweighting.
 
 #### Renormalization on null scorers
 
@@ -146,9 +150,9 @@ F3 is therefore retired as a separate scorer. The `f3` ID will not be used. F2's
 
 **Why this complements F2:** F2 confirms specific elements exist via locators. F4 catches the broader class of failure where each individual element is present but the page as a whole has drifted from the prompt's intent — generic placeholder copy, missing or stubbed features, sections that don't match the described product.
 
-**Gap vs research:** Single judge only; cross-family dual-judge protocol deferred to v0.3 along with V1's.
+**Gap vs research:** Single judge only; cross-family dual-judge protocol deferred to v0.4 along with V1's.
 
-**Recommended change (v0.3):** Promote to dual cross-family judges, sharing the V1 second-judge rollout.
+**Recommended change (v0.4):** Promote to dual cross-family judges, sharing the V1 second-judge rollout.
 
 ---
 
@@ -184,33 +188,41 @@ F3 is therefore retired as a separate scorer. The `f3` ID will not be used. F2's
 
 ---
 
-### F7 — Auth round-trip (planned v0.3, backend track)
+### F7 — Auth round-trip (v0.3, backend track)
 
-**What it measures:** Whether the deployed backend correctly handles a complete auth lifecycle: sign up → log in → make a change → log out → log in again → confirm the change persists. Catches broken sessions, broken persistence, broken signup forms — failures that F2's single-session checks miss because they never re-authenticate.
+**File:** `src/scorers/functional/f7-auth-roundtrip.ts`
 
-**How (planned):** Requires a `signup_credentials` block in `submissions.yaml` (pre-seeded credentials or a documented signup flow) and a `seed_strategy` (`signup_each_run` vs. `pre_seeded`). The harness performs the auth lifecycle via Playwright, then checks state across the log-out / log-back-in boundary. No automated signup for tools that prohibit it (Lovable currently bans it) — sign-up is a documented manual step that produces credentials the harness reads.
+**What it measures:** Whether the deployed backend correctly handles a complete auth lifecycle: log in → create a record with a unique per-run marker → log out → log in again → confirm the record persists. Catches broken sessions, broken signup forms, and writes that don't actually persist server-side — failures that F2's single-session checks miss because they never re-authenticate.
 
-**Within-dimension weight (planned):** ~10% within Functional, sourced from F2 narrowing when the backend track ships. F2 contracts from 45% to roughly 30%; the freed weight redistributes across F7, F8, F9.
+**How:** Runs only when the submission carries a `backend` block with `signup_credentials`. The harness drives the deployed login form via Playwright (resilient email/password/submit heuristics — see `src/scorers/backend/login.ts`), creates a contact named after a unique marker (`F7_CONTACT_<run>_<rand>`), logs out via a log-out/sign-out control, re-navigates and logs in again, and asserts the marker is still visible. The unique marker means the persistence check can't pass on seed data. No automated signup for tools that prohibit it (Lovable bans it; see [[lovable-anti-automation]]) — accounts are supplied via `signup_credentials`, created manually.
 
-**N/A handling:** Frontend-only tools (Claude Artifacts, v0 deploys without Supabase) score N/A on F7. Tools that score N/A on F7/F8/S4 are honestly not in the same category as backend-shipping tools — that's the correct signal, not a penalty to game around. Weight redistributes within Functional per §"Renormalization on null scorers".
+**Scoring:** `passed` requires both record creation and post-relogin persistence. Partial credit = fraction of lifecycle steps that succeeded (so a tool that logs in but can't persist scores above zero but below pass).
 
----
+**Within-dimension weight:** 8, additive on top of the non-backend Functional scorers (which sum to 100). On non-backend submissions F7 is null and the others keep their exact prior proportions; on backend submissions F7 reflows in at 8/115 ≈ 7%.
 
-### F8 — Backend persistence across sessions (planned v0.3, backend track)
-
-**What it measures:** Whether state persists to a real backend, not just to localStorage. Create an entity in browser context A → open the same URL in a fresh incognito context B → log in → confirm the entity is there.
-
-**How (planned):** Two browser contexts via Playwright. Context A authenticates, creates an entity, closes. Context B (fresh, no shared cookies/storage) reopens the deployed URL, authenticates with the same credentials, asserts the entity is visible. F8 cleanly distinguishes localStorage-only tools from real-backend tools — a distinction F2 alone can't make even with `setup` reload actions, because reload preserves localStorage.
-
-**Within-dimension weight (planned):** ~10% within Functional, sourced from F2 narrowing.
-
-**Why this complements F7:** F7 confirms auth round-trip works within one browser session. F8 confirms persistence is server-side, not client-side. Together they verify the backend is real and stateful, not just a localStorage-backed simulation.
-
-**N/A handling:** Frontend-only tools score N/A. Tools shipping localStorage-only persistence (the v0.2 reference `todo-localstorage` prompt is one) will fail F8 by design — that's the correct signal.
+**N/A handling:** Frontend-only tools (Claude Artifacts, v0 deploys without a backend) and any submission without `signup_credentials` score N/A on F7 — weight redistributes within Functional per §"Renormalization on null scorers".
 
 ---
 
-### F9 — Scheduled-job execution (planned v0.3, backend track)
+### F8 — Backend persistence across sessions (v0.3, backend track)
+
+**File:** `src/scorers/functional/f8-cross-session.ts`
+
+**What it measures:** Whether state persists to a real backend, not just to localStorage. Create a record in browser context A → open the same URL in a fresh incognito context B → log in → confirm the record is there.
+
+**How:** Two browser contexts via Playwright. Context A (the main page) logs in and creates a contact with a unique marker. Context B — a fresh `browser.newContext()` with clean storage — reopens the deployed URL, logs in with the same credentials, and asserts the marker is visible. Because context B shares no cookies or localStorage with A, a localStorage-only app fails (B's storage is empty) while a real-backend app passes. This is the discriminator F2 alone can't make even with `setup` reload actions, because reload preserves localStorage.
+
+**Scoring:** `passed` requires the record created in A to be visible in the fresh context B (`details.crossedSessions`). Partial credit = fraction of steps succeeded.
+
+**Within-dimension weight:** 7, additive (reflows in at 7/115 ≈ 6% on backend submissions; null otherwise).
+
+**Why this complements F7:** F7 confirms auth round-trip works within one browser session. F8 confirms persistence is server-side, not client-side. Together they verify the backend is real and stateful, not a localStorage-backed simulation.
+
+**N/A handling:** Frontend-only tools score N/A. Tools shipping localStorage-only persistence (the `todo-localstorage` prompt is one) would fail F8 by design — that's the correct signal.
+
+---
+
+### F9 — Scheduled-job execution (planned v0.4, backend track)
 
 **What it measures:** For prompts whose acceptance YAML requires a working scheduled job (e.g., "expense tracker with weekly summary email," "task app with overdue-task auto-reminder"), whether the tool wired up working cron / scheduled-work and whether that work actually runs and produces the expected side effect.
 
@@ -340,9 +352,9 @@ The force-trigger endpoint is mandatory in F9-bearing prompts so the harness doe
 
 **Within-dimension weight (research):** 15% of Code Quality.
 
-**Gap vs research:** Single judge only; cross-family dual-judge protocol deferred to v0.3 along with V1's. Sampling is heuristic (path-tier sort by file size) rather than diversity-weighted; could miss representative files in unusual project structures.
+**Gap vs research:** Single judge only; cross-family dual-judge protocol deferred to v0.4 along with V1's. Sampling is heuristic (path-tier sort by file size) rather than diversity-weighted; could miss representative files in unusual project structures.
 
-**Recommended change (v0.3):** Promote to dual cross-family judges, sharing the V1 second-judge rollout. Consider AST-based file scoring (component count, prop interfaces detected) to drive sampling instead of path heuristics.
+**Recommended change (v0.4):** Promote to dual cross-family judges, sharing the V1 second-judge rollout. Consider AST-based file scoring (component count, prop interfaces detected) to drive sampling instead of path heuristics.
 
 ---
 
@@ -390,7 +402,7 @@ Score = passed / total applicable checks.
 
 ---
 
-### C10 — Project structure (planned v0.3)
+### C10 — Project structure (planned v0.4)
 
 **What it measures:** Deterministic AST + filesystem inspection for framework anti-patterns that catch concrete failure modes the LLM judge (C7) catches inconsistently and ESLint (C1) doesn't catch at all.
 
@@ -403,7 +415,7 @@ Score = passed / total applicable checks.
 
 **Within-dimension weight (planned):** ~5–8% within Code Quality, sourced from C7 narrowing. C7's LLM rubric was previously asked to cover architecture by judgment alone; moving project-structure checks to a deterministic backbone lets C7 contract to its core "appropriateness of abstraction boundaries / prop-typing quality / pattern consistency" scope.
 
-**Promotion rationale:** Promoted from 💡 design-only to 📋 v0.3 because it addresses a class of failure (server-only imports in client files, db calls in render paths) that produces real runtime / hydration errors and is invisible to lint.
+**Promotion rationale:** Promoted from 💡 design-only to 📋 v0.4 because it addresses a class of failure (server-only imports in client files, db calls in render paths) that produces real runtime / hydration errors and is invisible to lint.
 
 **Gap vs research:** Patterns are framework-specific — Next.js + Vite-React covered first, other frameworks ship as adapters land.
 
@@ -419,11 +431,11 @@ Score = passed / total applicable checks.
 - **Function and file length distribution** — median and 90th-percentile function/file length scored against explicit anchors
 - **Comment density and quality** — comment-to-code ratio penalty for both <2% and >25%; detection of filler comments (`// imports`, `// state`, `// render`) via regex
 
-**Why held at 💡:** Promotion to the roadmap requires a research call on whether the signal beyond C1 (lint) plus C7's v0.3 dual-judge upgrade is worth a separate scorer. The dual-judge protocol may close enough of the readability variance gap to make C11 redundant. The decision lands after C7 dual-judge ships and we measure the residual variance.
+**Why held at 💡:** Promotion to the roadmap requires a research call on whether the signal beyond C1 (lint) plus C7's v0.4 dual-judge upgrade is worth a separate scorer. The dual-judge protocol may close enough of the readability variance gap to make C11 redundant. The decision lands after C7 dual-judge ships and we measure the residual variance.
 
 ---
 
-### C12 — Schema design quality (planned v0.3, app track only)
+### C12 — Schema design quality (planned v0.4, app track only)
 
 **What it measures:** Deterministic checks on emitted database schemas (Prisma, Drizzle, raw SQL migrations, Supabase schema files). Catches schema rot — the most expensive AI-tool failure mode, because users discover it months in, after lock-in.
 
@@ -442,7 +454,7 @@ Adapts ProjDevBench's "system architecture" evaluation axis into deterministic c
 
 **Within-dimension weight (planned):** ~6–8% within Code Quality, sourced from C7 narrowing alongside C10.
 
-**Why this is the highest-value v0.3 code-quality addition:** schema rot is invisible to F7/F8/S4 — those test that the backend *works*, not that the schema is *reasonable*. A tool can pass auth round-trip, pass cross-session persistence, pass RLS probes, and still ship a schema with no foreign keys, no indexes, JSON-blob columns where a join would be appropriate, and inconsistent on-delete behavior. C12 catches that.
+**Why this is the highest-value v0.4 code-quality addition:** schema rot is invisible to F7/F8/S4 — those test that the backend *works*, not that the schema is *reasonable*. A tool can pass auth round-trip, pass cross-session persistence, pass RLS probes, and still ship a schema with no foreign keys, no indexes, JSON-blob columns where a join would be appropriate, and inconsistent on-delete behavior. C12 catches that.
 
 **N/A handling:** Tools without a schema file (frontend-only deploys, Claude Artifacts) score N/A — same handling as F7/F8/S4. Patterns will need quarterly refresh as Drizzle / Prisma / Supabase / Convex idioms evolve; budget into the same maintenance cycle as S2 auth-pattern refresh.
 
@@ -490,7 +502,7 @@ See `prompts/corpus/saas-pricing-page.yaml` for a worked example.
 2. **Disagreement handling** — when two judges disagree >1 point on any criterion, flag for manual review or a third judge. **Not applicable until dual-judge ships.**
 3. **Krippendorff's α calibration** — target α ≥ 0.67 (tentative reliability) against a 50-example human-rated calibration set. **Not implemented.**
 
-**Recommended change (v0.3):** Add second judge from a different model family. Add disagreement flagging logic. Build the calibration corpus.
+**Recommended change (v0.4):** Add second judge from a different model family. Add disagreement flagging logic. Build the calibration corpus.
 
 ---
 
@@ -704,18 +716,27 @@ Either sub-check is N/A when its input is missing (no source ZIP for secrets, or
 
 ---
 
-### S4 — Backend security probes (planned v0.3, backend track)
+### S4 — Backend security probes (v0.3, backend track)
 
-**What it measures:** Direct API probes against the deployed backend that catch the actual server-side auth-bypass and authorization failures that S2 only catches via *client-side* hints.
+**File:** `src/scorers/security/s4-backend.ts`
 
-**How (planned):** Two probe classes per prompt, declared in the prompt's acceptance YAML:
+**What it measures:** Read-only runtime probes against the deployed backend that catch the actual server-side authorization failures that S2 only catches via *client-side* hints.
 
-- **Unauthenticated GET** on a contact-detail / user-data endpoint that should require auth → expect 401/403, fail if 200
-- **Cross-user GET** — authenticate as user A, attempt to read user B's data via direct API call → expect 403, fail if 200 with B's data
+**How (v0.2.0 — credential-only auto-discovery):** Runs only when the submission carries a `backend` block with two accounts. The **only** input is credentials — no tokens, endpoints, or record ids supplied by hand. The harness:
 
-Probes are read-only and do not mutate the tool's database. Built on top of the same `signup_credentials` / `seed_strategy` infrastructure as F7 and F8.
+1. signs in as **user B** through the real login form (the shared browser driver, `src/scorers/backend/login.ts`), **seeds a uniquely-marked record as B**, then observes B's dashboard traffic — auto-selecting the JSON response (GET *or* POST/RPC) that returns the largest record array and using the seed marker as the leak identifier;
+2. **unauth probe** — replays B's request with embedded auth **stripped** (token keys removed from the JSON body, Authorization header dropped) from a session-less context → must be rejected (401/403) and must not serve B's data;
+3. **cross-user probe** — signs in as **user A**, captures **A's own** dashboard data response, and checks whether B's marker appears in it → A's own data must **not** contain B's record.
 
-**Within-Security weight (planned):** TBD on ship — likely sourced as additive (the security dimension expands rather than reweighting existing scorers), since S1/S2/S3 cover code-pattern and dependency-vuln signals that S4's runtime probes complement rather than replace.
+**Critical correctness detail (auth-in-body):** the cross-user probe uses A's *own* request, not a replay of B's captured request. Many backends (Modelence, tRPC) carry the auth token in the request **body**, not a cookie — so replaying B's captured request "from A's context" stays authenticated as B and returns B's data, producing a false-positive leak. Testing against A's own authenticated response is correct regardless of where auth travels. Likewise the unauth probe must strip the body token, not merely drop cookies. (This was a real false-positive bug caught against the Modelence reference CRM and fixed in `0.2.0`.)
+
+Capturing POST as well as GET is required for RPC/GraphQL backends (e.g. Modelence's `POST /api/_internal/method/contacts.list`), which a GET-only capture would miss. A probe that errors (timeout / refused / login failure) is recorded as inconclusive, not a failure. The artifact records only the redacted per-probe outcome and the discovered endpoint URL — never response bodies. **S4 writes one record (B's seeded contact)** to guarantee a discoverable target — otherwise non-destructive (no deletes, no writes as A).
+
+**Scope boundary:** the cross-user probe tests *list/collection* endpoints ("does A's list contain B's rows?"), which catches the dominant "endpoint returns every user's records" failure. It does **not** probe per-record detail endpoints (`GET /contacts/<B's id>` as A) — that narrower IDOR class would need per-record id probing and is not yet covered.
+
+**Scoring:** each failed probe = 10 penalty points (both failure classes are direct data exposure = critical); `score = max(0, 1 − penalty/20)`; `passed = no failed probes`. `details.crossTenantLeak` is the headline boolean.
+
+**Within-Security weight:** 15, additive on top of S1/S2/S3 (which sum to 100 = 40/35/25). On non-backend submissions S4 is null and S1/S2/S3 keep their exact prior proportions; on backend submissions S4 reflows in at 15/115 ≈ 13%.
 
 **Why this is the single biggest security signal-quality win in v0.3:** S2 catches code patterns that *suggest* auth is broken (Supabase service-role key in client code, JWT decode without verify, RLS-off schema files committed). S4 catches the actual server-side failure — the canonical "Supabase RLS off, every user can read every other user's data" bug that's invisible from the frontend until someone tries it.
 
@@ -772,24 +793,32 @@ When activated, the pairwise score becomes the primary ranking; absolute 0–100
 | Default empty-state critical criterion for app-track prompts | Catches the most common app-track regression: blank pane on zero records |
 | Route-split count + license-hygiene scan in C5 | Closes the remaining sub-checks from research C5 not covered by gzipped payload alone |
 
-### v0.3 priority changes
+### v0.3 shipped changes
 
 | Change | Impact |
 |---|---|
-| **Backend track infrastructure** — `backend_url` / `signup_credentials` / `seed_strategy` in `submissions.yaml` | Enables F7/F8/F9/S4. Submission-flow precondition for the rest of this row block |
-| **F7 auth round-trip** | Tests sign-up → log-in → state-change → log-out → log-in-again persistence. Catches broken sessions, broken signup forms |
+| **Backend track infrastructure** — `backend_url` / `signup_credentials` / `seed_strategy` in `submissions.yaml` | Enables F7/F8/S4. Submission-flow precondition for the backend track |
+| **F7 auth round-trip** | Login → create a marked record → logout → re-login → record persists. Catches broken sessions and writes that don't persist server-side |
 | **F8 backend persistence across sessions** | Two-context test distinguishing localStorage tools from real-backend tools |
+| **S4 backend security probes** | Direct API probes (unauthenticated GET, cross-user GET) catch the canonical "RLS off" failure that S2 only catches via client-side hints |
+| **Tier 3 corpus prompt** (`crm-contacts`) | Multi-user CRM — email/password auth, per-user contact lists, server-side data isolation |
+| **Authenticated dashboard screenshots** for F4/V1 | Backend apps now capture `dashboard.png` / `dashboard-mobile.png` after login so judges see the real UI, not the login screen |
+| **F2 within-dim weight additive model** | F7/F8 sit on top of the 100-point base; Tier 1/2 submissions score exactly as before |
+| **Fix-report / audit.md generation** | Per-submission markdown audit report listing failing scorers and actionable notes |
+
+### v0.4 planned changes
+
+| Change | Impact |
+|---|---|
 | **F9 scheduled-job execution** | Verifies cron / scheduled work both exists (config present) and runs (force-trigger endpoint produces side effects). Currently unscored anywhere |
-| **S4 backend security probes** | Direct API probes (unauthenticated GET, cross-user GET) catch the canonical "Supabase RLS off" failure that S2 only catches via client-side hints. Single biggest *security* signal-quality win in v0.3 |
 | **C10 project-structure deterministic checks** | Catches framework anti-patterns (server-only imports in `'use client'` files, db calls in render paths) — invisible to lint |
 | **C12 schema-design deterministic checks (app track)** | Catches schema rot (missing FKs, no indexes, RLS off, all-nullable columns) — invisible to F7/F8/S4 which only test the backend works, not whether schema is reasonable |
-| **F2 within-dim weight reflow** when F7/F8/F9 ship (45% → ~30%) | Documented v0.3 weighting change; freed weight redistributes across F7 (~10%), F8 (~10%), F9 (~5–10% on prompts that exercise scheduled work) |
 | **C7 within-dim weight narrows** when C10/C12 ship | Architecture and schema move to deterministic backbones; C7 contracts to its core "abstraction boundaries / prop-typing / pattern consistency" scope |
 | Add second judge from a different model family across V1, F4, and C7 | Eliminates self-preference bias; one rollout covers all three judge scorers |
 | Add disagreement flagging logic (>1 point divergence) for the dual-judge scorers | Surfaces low-confidence judgments for manual review |
 | Add dynamic per-prompt F1 timeout from `baselineBuildSeconds` in prompt YAML | Prevents false-positive timeouts on complex prompts |
-| Implement V3 reference-design fidelity (CLIP + Block-Match + Text + Position + Color) | Enables reference-image prompts (Tier 3 "make it look like Linear") |
-| Add typographic hierarchy and color count/harmony to V2 | Remaining V2 gaps after the v0.2 CSS-signal additions; covers typographic depth and palette harmony |
+| Implement V3 reference-design fidelity (CLIP + Block-Match + Text + Position + Color) | Enables reference-image prompts ("make it look like Linear") |
+| Add typographic hierarchy and color count/harmony to V2 | Remaining V2 gaps after the v0.2 CSS-signal additions |
 | Implement harness-instrumented timing layer (replaces self-reported cost) | Enables automated leaderboard refreshes without manual timing input |
 | Krippendorff's α calibration pipeline for V1, F4, and C7 | Validates judge reliability against human ratings |
 | Duplication detection (`jscpd`) in C6 | Completes AST complexity sub-checks |
@@ -802,7 +831,7 @@ These are research positions tracked here so they don't get re-debated. None are
 
 | Item | Status reason |
 |---|---|
-| **C11 readability (deterministic anchors)** | Held until v0.3 dual-judge upgrade for C7 ships; dual-judge may close enough of the readability variance gap to make C11 redundant |
+| **C11 readability (deterministic anchors)** | Held until v0.4 dual-judge upgrade for C7 ships; dual-judge may close enough of the readability variance gap to make C11 redundant |
 | **§"Auto-retirement of saturated prompts"** | Requires sustained quarterly leaderboard runs that don't exist yet. Revisit after v0.3 has 2+ quarterly refreshes on record |
 | **§"Hard Mode subset"** | Same baseline-data prerequisite as auto-retirement |
 | **§"Pairwise Bradley–Terry fallback"** | Third line of defense after auto-retirement and Hard Mode; only fires when those two stop being enough. Deferred until the leaderboard has >12 months of data and saturation is genuinely visible |
@@ -829,6 +858,8 @@ These are research positions tracked here so they don't get re-debated. None are
 | f4 | `functional/f4-judge.ts` | 0.2.0 | Single judge; 4 default criteria + per-prompt `functional_checklist.extra`; missing-features list |
 | f5 | `functional/f5-errors.ts` | 0.1.0 | Linear decay at 10 errors |
 | f6 | `functional/f6-verbatim.ts` | 0.1.0 | exact_copy, hex_value, structural types |
+| f7 | `functional/f7-auth-roundtrip.ts` | 0.1.0 | Backend track. login → create → logout → relogin → persists. N/A without `backend.signup_credentials`. Additive weight 8 |
+| f8 | `functional/f8-cross-session.ts` | 0.1.0 | Backend track. Record created in context A must appear in fresh incognito context B (real backend vs. localStorage). Additive weight 7 |
 | c1 | `code-quality/c1-eslint.ts` | 0.1.0 | typescript-eslint recommended only |
 | c2 | `code-quality/c2-types.ts` | 0.1.0 | tsc strict; ignores missing-module errors |
 | c3 | `code-quality/c3-axe.ts` | 0.1.0 | wcag2a/aa, wcag21a/aa, wcag22aa tags |
@@ -844,4 +875,5 @@ These are research positions tracked here so they don't get re-debated. None are
 | s1 | `security/s1-secrets.ts` | 0.3.0 | Two sub-checks: source secrets (regex + Semgrep `p/secrets`+`p/owasp-top-ten` if installed + trufflehog filesystem if installed; findings unioned) + 6-header deployed audit; mean of whichever ran |
 | s2 | `security/s2-auth.ts` | 0.2.0 | 16 patterns; client-side awareness; weighted severity. v0.2.0 added secure-by-default patterns: `xss_unsanitized_html` (high), `insecure_transport` (medium), `sensitive_data_logged` (medium) |
 | s3 | `security/s3-vuln.ts` | 0.1.2 | npm audit; critical=10, high=3, moderate=1, low=0.1 penalty |
+| s4 | `security/s4-backend.ts` | 0.2.0 | Backend track. Credential-only: signs in as B via the UI, auto-discovers B's data endpoint, replays it unauthenticated + as A. `cross_tenant_leak` headline. N/A without a `backend` block. Additive weight 15 |
 | cost | `cost.ts` | 0.1.0 | Self-reported; informational only |

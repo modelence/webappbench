@@ -1,4 +1,4 @@
-import { loadConfig, type SubmissionConfigEntry } from '../core/config.ts';
+import { loadConfig, backendFromEntry, type SubmissionConfigEntry } from '../core/config.ts';
 import { createSubmissionArtifact } from '../core/submission.ts';
 import type { UserReportedCost, UserReportedTiming } from '../core/types.ts';
 import { computeComposite, formatComposite, formatCompositeBreakdown } from './composite.ts';
@@ -54,6 +54,7 @@ export async function runOne(
       toolVersion: entry.toolVersion,
       timing: timingFromEntry(entry),
       cost: costFromEntry(entry),
+      backend: backendFromEntry(entry),
       corpusDir: opts.corpusDir,
       artifactsRoot: opts.artifactsRoot,
     });

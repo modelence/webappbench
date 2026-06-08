@@ -44,6 +44,8 @@ const SCREENSHOTS: ScreenshotEntry[] = [
   { name: 'viewport-mobile', caption: 'Viewport-sized capture at mobile width (360x800).' },
   { name: 'scrolled-viewport', caption: 'Viewport-sized capture AFTER scrolling 800px down. Any element visible at the top of this image is sticky or fixed; any element described in the prompt as "sticky" but absent from the top here is NOT sticky.' },
   { name: 'mid-scroll', caption: 'Viewport-sized capture scrolled to roughly the middle of the page.' },
+  { name: 'dashboard', caption: 'Full-page screenshot of the AUTHENTICATED dashboard with one record present (backend apps only; absent for logged-out/static apps). This is the real app behind the login screen, with a populated list — verify list display, row controls (e.g. a delete ✕), and the create form against this. Judge feature completeness against the dashboard screenshots, not the login screen. NOTE: do not penalise the absence of an empty/"no items yet" state — that is verified separately and is intentionally not shown here (this view always has one record).' },
+  { name: 'dashboard-mobile', caption: 'Viewport-sized authenticated dashboard at mobile width (backend apps only).' },
 ];
 
 const SYSTEM_PROMPT = `You are evaluating whether an AI-generated webpage satisfies the FUNCTIONAL intent of the user's prompt.

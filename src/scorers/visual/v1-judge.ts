@@ -39,7 +39,11 @@ interface JudgeOutput {
   overall_notes?: string;
 }
 
-const SCREENSHOT_NAMES = ['initial', 'viewport-mobile', 'mid-scroll'] as const;
+// `dashboard` is the authenticated (populated) view, present only for backend
+// apps (skipped if absent) — so V1 judges the real app, not just the login
+// screen. The empty-state shot is omitted from V1 (visual design is better
+// judged on a populated UI).
+const SCREENSHOT_NAMES = ['initial', 'viewport-mobile', 'mid-scroll', 'dashboard'] as const;
 
 const SYSTEM_PROMPT = `You are an expert web design reviewer evaluating AI-generated landing pages.
 You will be shown screenshots of a website and asked to score it on specific visual design criteria.

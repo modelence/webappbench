@@ -221,6 +221,9 @@ async function formatScorerFailure(
     case 's1': return await formatS1(result, sourceDir);
     case 's2': return await formatS2(result, sourceDir);
     case 's3': return formatS3(result);
+    case 's4': return formatS4(result);
+    case 'f7': return formatBackendSteps(result, 'F7 — Auth round-trip', 'A record created before logout must persist after logging back in. Verify the backend actually persists writes and that sessions survive logout/login.');
+    case 'f8': return formatBackendSteps(result, 'F8 — Cross-session persistence', 'A record created in one browser context must appear in a fresh incognito context after login. If it does not, the app is storing data client-side (localStorage) rather than in a real backend.');
     default:   return formatGeneric(id, result);
   }
 }
@@ -683,6 +686,54 @@ function formatS3(result: ScorerResult): string {
     lines.push('');
     lines.push('**Fix**: run `npm audit fix` for fixable vulns. For unfixable transitive deps, override the version in `package.json`\'s `overrides` block, or upgrade the parent dependency.');
   }
+  return lines.join('\n');
+}
+
+function formatS4(result: ScorerResult): string {
+  const d = result.details as Record<string, unknown>;
+  if (d['note']) return `_${String(d['note'])}_`;
+
+  const lines: string[] = [];
+  lines.push(`**What this measures**: read-only runtime probes against the deployed backend — an unauthenticated GET on a protected endpoint (must be rejected) and a cross-user GET (user A must not be able to read user B's data). Catches the server-side authorization failures that S2 only infers from client-side code.`);
+  lines.push('');
+  if (d['crossTenantLeak'] === true) {
+    lines.push('**🔴 CROSS-TENANT DATA LEAK**: user A successfully read user B\'s data. This is a critical authorization failure — enforce row-level security / per-user authorization on every backend read.');
+    lines.push('');
+  }
+  const probes = (d['probes'] as Array<Record<string, unknown>>) ?? [];
+  const failed = probes.filter((p) => p['passed'] === false);
+  lines.push(`**Result**: ${probes.length} probe(s), ${failed.length} failed.`);
+  lines.push('');
+  if (failed.length > 0) {
+    lines.push('**Failing probes**:');
+    for (const p of failed) {
+      lines.push(`- **\`${String(p['id'])}\`** (${String(p['kind'])}) — ${String(p['note'])}`);
+    }
+    lines.push('');
+    lines.push('**Fix**: every backend read of user-scoped data must verify the caller owns it. For Supabase, enable Row Level Security on the table and add a policy like `auth.uid() = user_id`. For custom APIs, check the authenticated user id against the resource owner on every GET.');
+  }
+  return lines.join('\n');
+}
+
+// Shared formatter for the step-based backend functional scorers (F7/F8).
+function formatBackendSteps(result: ScorerResult, title: string, advice: string): string {
+  const d = result.details as Record<string, unknown>;
+  if (result.passed === null && d['note']) return `_${String(d['note'])}_`;
+
+  const lines: string[] = [];
+  lines.push(`**${title}**`);
+  lines.push('');
+  const steps = (d['steps'] as Array<Record<string, unknown>>) ?? [];
+  if (steps.length > 0) {
+    lines.push('**Steps**:');
+    for (const s of steps) {
+      const mark = s['ok'] ? '✓' : '✗';
+      const note = s['note'] ? ` — ${String(s['note'])}` : '';
+      lines.push(`- ${mark} \`${String(s['step'])}\`${note}`);
+    }
+    lines.push('');
+  }
+  lines.push(`**Fix**: ${advice}`);
   return lines.join('\n');
 }
 
