@@ -1,0 +1,48 @@
+name: Publish to NPM
+
+on:
+  push:
+    tags:
+      - 'webappbench@*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Extract version from tag
+        id: package-info
+        run: |
+          TAG_NAME="${{ github.ref_name }}"
+          VERSION="${TAG_NAME##*@}"
+          ACTUAL_VERSION=$(node -p "require('./package.json').version")
+          if [ "$ACTUAL_VERSION" != "$VERSION" ]; then
+            echo "Version mismatch: tag is $VERSION but package.json has $ACTUAL_VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Publish to NPM
+        env:
+          NPM_CONFIG_PROVENANCE: true
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [[ "${{ steps.package-info.outputs.version }}" == *"dev"* ]]; then
+            npm publish --tag dev --access public --provenance
+          else
+            npm publish --access public --provenance
+          fi
