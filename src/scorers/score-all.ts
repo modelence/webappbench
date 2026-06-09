@@ -21,6 +21,7 @@ export interface BatchOptions {
   configPath: string;
   corpusDir: string;
   artifactsRoot: string;
+  only?: string[];
 }
 
 export async function scoreAll(opts: BatchOptions): Promise<BatchOutcome[]> {
@@ -59,7 +60,7 @@ export async function runOne(
       artifactsRoot: opts.artifactsRoot,
     });
     const { onProgress, flush } = makeProgressHandler();
-    const { results } = await scoreSubmission(paths.root, { onProgress });
+    const { results } = await scoreSubmission(paths.root, { onProgress, only: opts.only });
     flush();
     const composite = computeComposite(results);
     console.log(`  ${formatComposite(composite)}`);

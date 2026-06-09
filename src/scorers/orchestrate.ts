@@ -42,6 +42,8 @@ export interface ScoreOutput {
 
 export interface ScoreOptions {
   onProgress?: (event: ProgressEvent) => void;
+  // When set, only these scorer IDs are executed; all others are skipped.
+  only?: string[];
 }
 
 export type ProgressEvent =
@@ -77,6 +79,9 @@ export async function scoreSubmission(
     name: string,
     fn: () => Promise<ScorerResult>,
   ): Promise<ScorerResult> => {
+    if (opts.only && !opts.only.includes(name)) {
+      return { scorer: name, version: '0', passed: null, score: null, details: { note: 'skipped (not in --scorer filter)' } };
+    }
     opts.onProgress?.({ kind: 'scorer_start', name });
     const started = Date.now();
     const result = await fn();
@@ -94,7 +99,10 @@ export async function scoreSubmission(
 
   try {
     results['f1'] = await runScorer('f1', () => runF1(ctx));
-    if (results['f1']?.passed) {
+    // When a scorer filter is active, bypass F1's gate — the caller explicitly
+    // requested specific scorers and F1 may legitimately be excluded or failing
+    // due to URL expiry while screenshots from a prior run are still available.
+    if (results['f1']?.passed || opts.only) {
       results['f2'] = await runScorer('f2', () => runF2(ctx));
       // Score F5 here — all page events during F1+F2 have been collected.
       results['f5'] = await runScorer('f5', async () => {

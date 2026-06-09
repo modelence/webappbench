@@ -176,6 +176,7 @@ program
 interface ScoreOptions {
   prompt?: string;
   run?: number;
+  scorer?: string[];
   config: string;
   corpus: string;
   artifacts: string;
@@ -189,6 +190,7 @@ program
   .argument('[tool]', 'Tool name (must have at least one entry in submissions.yaml). Omit to score every entry.', parseToolName)
   .option('-p, --prompt <id>', 'Filter to a single prompt id (requires <tool>)')
   .option('-r, --run <idx>', 'Filter to a single run index (requires <tool>)', parseNonNegativeInt)
+  .option('-s, --scorer <ids>', 'Comma-separated scorer IDs to run (e.g. v1,f4). Omit to run all.')
   .option('-c, --config <path>', 'Submissions config file', 'submissions.yaml')
   .option('-d, --corpus <dir>', 'Corpus directory', 'prompts/corpus')
   .option('-a, --artifacts <dir>', 'Artifacts root', 'artifacts')
@@ -205,10 +207,13 @@ program
   .command('rescore')
   .description('Re-score an existing submission artifact directory in place (does not read submissions.yaml)')
   .argument('<dir>', 'Submission directory (contains submission.json + prompt.json)')
-  .action(async (dir: string) => {
+  .option('-s, --scorer <ids>', 'Comma-separated scorer IDs to run (e.g. v1,f4). Omit to run all.')
+  .action(async (dir: string, opts: { scorer?: string }) => {
+    const only = opts.scorer ? opts.scorer.split(',').map(s => s.trim()) : undefined;
+    if (only) console.log(`Scorer filter: ${only.join(', ')}`);
     console.log(`Scoring ${dir}`);
     const { onProgress, flush } = makeProgressHandler();
-    const { results } = await scoreSubmission(dir, { onProgress });
+    const { results } = await scoreSubmission(dir, { onProgress, only });
     flush();
     const composite = computeComposite(results);
     console.log(`  ${formatComposite(composite)}`);
@@ -240,6 +245,7 @@ async function scoreFromConfig(tool: ToolName | undefined, opts: ScoreOptions): 
     const outcome = await runOne(entry, {
       corpusDir: opts.corpus,
       artifactsRoot: opts.artifacts,
+      only: opts.scorer ? opts.scorer.flatMap(s => s.split(',').map(x => x.trim())) : undefined,
     });
     if (outcome.ok) {
       okCount += 1;
