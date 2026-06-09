@@ -10,7 +10,9 @@ export async function runCost(submission: Submission, paths: ArtifactPaths): Pro
   const cost = submission.userReportedCost;
 
   const ttfrMs = diffMsOrNull(timing?.promptSubmittedAt, timing?.firstRenderAt);
-  const ttwbMs = diffMsOrNull(timing?.promptSubmittedAt, timing?.workingBuildAt);
+  const ttwbMs =
+    diffMsOrNull(timing?.promptSubmittedAt, timing?.workingBuildAt) ??
+    secToMsOrNull(timing?.buildSeconds);
 
   const payload = {
     source: 'user-reported' as const,
@@ -45,4 +47,9 @@ function diffMsOrNull(fromIso: string | undefined, toIso: string | undefined): n
   if (!fromIso || !toIso) return null;
   const diff = new Date(toIso).getTime() - new Date(fromIso).getTime();
   return Number.isFinite(diff) && diff >= 0 ? diff : null;
+}
+
+function secToMsOrNull(seconds: number | undefined): number | null {
+  if (seconds === undefined) return null;
+  return seconds * 1000;
 }

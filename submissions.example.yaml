@@ -30,7 +30,8 @@ runs:
     # the tool's "Download code" option.
     # source: ./source-exports/lovable-nimbus.zip
     # Optional timing + cost:
-    # promptSubmittedAt: 2026-04-24T18:00:00Z
+    # buildSeconds: 90                          # seconds from prompt submit to working build
+    # promptSubmittedAt: 2026-04-24T18:00:00Z   # alternative: provide timestamps instead
     # firstRenderAt:    2026-04-24T18:00:45Z
     # workingBuildAt:   2026-04-24T18:01:10Z
     # credits: 5

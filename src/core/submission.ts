@@ -28,6 +28,7 @@ export const submissionSchema = z.object({
       promptSubmittedAt: z.string().datetime().optional(),
       firstRenderAt: z.string().datetime().optional(),
       workingBuildAt: z.string().datetime().optional(),
+      buildSeconds: z.number().nonnegative().optional(),
     })
     .optional(),
   userReportedCost: z

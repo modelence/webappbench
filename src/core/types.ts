@@ -78,6 +78,8 @@ export interface UserReportedTiming {
   promptSubmittedAt?: string;
   firstRenderAt?: string;
   workingBuildAt?: string;
+  // Simpler alternative: total seconds from prompt submission to working build.
+  buildSeconds?: number;
 }
 
 export interface UserReportedCost {

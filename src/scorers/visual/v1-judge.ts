@@ -6,7 +6,7 @@ import { writeJson } from '../../core/artifact.ts';
 import type { ChecklistConfig, ChecklistItem } from '../../core/types.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
 
-export const V1_VERSION = '0.2.0';
+export const V1_VERSION = '0.2.1';
 
 // Default visual-quality criteria, always included.
 const VISUAL_DEFAULTS = [
@@ -45,7 +45,7 @@ interface JudgeOutput {
 // judged on a populated UI).
 const SCREENSHOT_NAMES = ['initial', 'viewport-mobile', 'mid-scroll', 'dashboard'] as const;
 
-const SYSTEM_PROMPT = `You are an expert web design reviewer evaluating AI-generated landing pages.
+const SYSTEM_PROMPT = `You are an expert web design reviewer evaluating AI-generated web applications.
 You will be shown screenshots of a website and asked to score it on specific visual design criteria.
 
 IMPORTANT: Respond ONLY with valid JSON matching this schema exactly:
@@ -56,14 +56,18 @@ IMPORTANT: Respond ONLY with valid JSON matching this schema exactly:
   "overall_notes": "<optional 1-2 sentences>"
 }
 
-Score scale:
-1 = Very poor / unusable
-2 = Below average
-3 = Adequate / average for AI-generated content
-4 = Good, above average
-5 = Excellent / professional quality
+Score scale — use the concrete anchors below, not just the labels:
+1 = Broken or unusable: layout overflows, text illegible, buttons not visible, obviously unfinished
+2 = Below average: functional but visually rough — inconsistent spacing, clashing colours, hard to scan
+3 = Adequate: a competent default. Clean layout, readable text, no obvious errors. Looks like a generic template or a Bootstrap/Tailwind starter with no customisation. This is the expected baseline for AI-generated output.
+4 = Good: clear visual identity beyond the default — a distinctive colour palette, considered typography scale, purposeful spacing rhythm, or a layout that feels designed rather than assembled
+5 = Exceptional: production-quality. Multiple design decisions working together — custom brand character, polished micro-details (icon alignment, hover states, shadow depth), and a cohesive aesthetic that would not look out of place on a real product's marketing site or app. This should be rare.
 
-Be calibrated: a score of 3 is normal for AI-generated sites. Reserve 5 for genuinely impressive work.`;
+Calibration rules:
+- A plain white/light-grey background with default system or generic sans-serif font, no custom colour palette, and no visual character beyond functional layout is a 3, not higher — even if it is clean and bug-free.
+- A score of 4 requires at least one clearly intentional design decision that elevates it above a generic template.
+- A score of 5 requires multiple such decisions working together cohesively. Do not give 5 simply because the design is inoffensive or "professional-looking in a generic sense".
+- Scores of 4 and 5 combined should represent roughly the top 20–30% of well-executed designs. If you find yourself giving mostly 4s and 5s, recalibrate.`;
 
 export async function runV1(ctx: ScorerContext): Promise<ScorerResult> {
   const start = Date.now();
