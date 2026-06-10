@@ -12,6 +12,7 @@ For per-scorer mechanics see [METRICS.md](METRICS.md).
 - 🚧 **In progress** — committed for the named release, partial or full implementation underway
 - 📋 **Planned** — committed for the named release, not yet started
 - 💤 **Deferred** — no release commitment yet; tracked here so it doesn't get re-debated
+- ➡️ **Moved** — item relocated to a named release; kept in place as a pointer
 
 ---
 
@@ -158,8 +159,8 @@ F7/F8/S4 ship **additive** rather than narrowing F2/S1/S2/S3 for everyone. Each 
 ### Judge reliability
 
 - 📋 Cross-family dual-judge protocol for V1, F4, and C7. One rollout serves all three. Mitigates self-preference bias when a tool's backing LLM matches the judge's model family (Lovable uses Claude Sonnet — a Claude-only judge inflates Lovable scores by 5–10pp per the bias literature).
-- 📋 Disagreement flagging logic: when two judges disagree by >1 point on any criterion, flag for manual review or call a third judge.
-- 📋 Krippendorff's α calibration pipeline. Standalone CLI subcommand that takes a JSON file of human ratings + the corresponding judge outputs and computes α. Validates whether the judges actually correlate with human judgment. Requires a one-time pass to gather ~50 human-rated examples per dimension.
+- 📋 Disagreement arbitration logic: when two judges disagree by >1 point on any criterion, a third judge from a third model family is called automatically and the median of the three scores is used. Fully automated — no manual review queue (benchmark policy: no human scoring anywhere).
+- 📋 Inter-judge reliability pipeline. Standalone CLI subcommand that computes Krippendorff's α *between judges* (across model families) over the corresponding judge outputs, plus repeat-run variance per judge. Replaces the earlier human-rating calibration plan (which required ~50 human-rated examples per dimension) — per benchmark policy, no human scoring; reliability is established via cross-family agreement and self-consistency instead. Trade-off: no absolute ground-truth anchor; mitigated by cross-family diversity (a shared bias across model families is less likely than within one) and corroboration from the deterministic scorers on the ground they overlap.
 
 ### Architecture & schema deterministic checks
 
@@ -239,6 +240,54 @@ F9–F13 and S5–S6 follow the same additive model as F7/F8/S4: non-backend sub
 
 Provisional additive weights (within-dimension): F9 6, F10 4, F11 3, F12 3, F13 4 (Functional total +20); S5 12, S6 8 (Security total +20). Final weights set at ship time after calibration against ≥3 submissions.
 
+### Metric and reliability additions (ViBench-informed)
+
+Lighter items adopted from analyzing [ViBench](https://github.com/ViBench/vibench-public) (Replit/Georgian/CMU's vibe-coding benchmark, Apache 2.0) that fit v0.4 without disturbing its backend-correctness theme. The larger agentic-evaluation work lands in v0.5.
+
+- 📋 **Fully-functional flag (Pass@1-style)** — binary per-submission metric: true only when every applicable functional scorer is at its maximum (F1 pass, all F2 must_have criteria, F6 = 1.0, F7/F8 all steps where applicable). Published as a leaderboard column next to the composite. Rationale: graded composites mask single fatal defects — ViBench measured an 81% average graded score against only 46% fully-correct artifacts for the same model. The composite stays as the ranking signal; this column answers "does the app actually work, end to end?"
+- 📋 **ARIA snapshots as judge input** — capture Playwright ARIA accessibility snapshots alongside the existing screenshots and supply both to the F4 intent judge (and optionally V1 for non-visual criteria). Fine-grained UI state (checkbox states, badge counts, disabled controls) is lost to VLM image downsampling; the ARIA tree exposes it unambiguously.
+- 📋 **Evaluation-cost instrumentation** — record per-scorer LLM token usage, USD cost, and wall-clock into the artifact manifest and surface totals in the report. Prerequisite for budgeting the v0.5 agentic evaluator (ViBench reports ~$4.89 per artifact for agentic evaluation).
+- 📋 **Judge self-consistency harness** — CLI subcommand that re-runs the LLM-judge scorers (V1, F4, C7) N times against a frozen artifact set and reports per-criterion agreement and score variance. The automated stand-in for human calibration (see the amended v0.3 inter-judge reliability pipeline); also used to detect judge-model drift after provider model updates.
+
+---
+
+## v0.5 — Agentic test-plan evaluation
+
+Focus: replace brittle selector-based acceptance testing for complex apps with an **adaptive LLM QA agent** that executes natural-language test plans against the deployed URL. Design is modeled on [ViBench](https://github.com/ViBench/vibench-public)'s automatic evaluator (Apache 2.0, attributed; 99% step-level agreement with human experts in their alignment study). Deliberately *not* adopted from ViBench: its build agents / OpenHands harness / Docker pipeline (we score third-party products, not models we run) and its direct SQL seeding (we have no database access — see UI/API-driven seeding below). Everything in this release is fully automated; reliability is established by duplicate-run self-agreement, not human review.
+
+The core problem this solves: F2 acceptance criteria must predict selectors and interaction sequences, but every tool implements the same prompt with different UI choices. An agent that observes actual page state (ARIA snapshot + screenshot per action) and adapts — like a human QA tester — evaluates arbitrary implementations without technical assumptions.
+
+### Test-plan corpus format
+
+- 📋 **Per-prompt test plans** — natural-language plans stored alongside the prompt YAML: `purpose`, `preconditions` (seedable state), sequential `steps` (each with a name, actions + verifications, and a point value), `full_points`. Verifications are fatal by default; `(non-fatal)` verifications dock points but let execution continue. Steps describe user-visible behavior only — never selectors or DOM structure, so any reasonable implementation can pass. Zod schema + loader following the existing prompt-corpus pattern.
+- 📋 **Graded score + plan-level pass** — per-plan score = points earned / full_points; a plan passes only at 100%. Relative dates (D0/D1 style) and explicit values keep plans deterministic across runs.
+
+### Evaluator
+
+- 📋 **F14 agentic test-plan scorer** — LLM agent with a persistent REPL-style Playwright session against the deployed URL: the agent composes and executes Playwright snippets incrementally; variables and browser contexts persist across executions; each execution returns console output, an ARIA snapshot, and a screenshot. Multi-context support for cross-user verifications (reuses F8's session machinery and the v0.4 replay helper). Per-step JSON verification logs + screenshots written to the artifact dir as the audit trail. Additive within Functional (provisional weight set at ship time, same model as F7/F8); F2 remains the acceptance scorer for Tier 1/2 prompts and runs alongside F14 on Tier 3 as corroboration.
+- 📋 **Evaluator guardrails** — anti-gaming system-prompt rules ported from ViBench: when a correct action doesn't produce the expected outcome, report the failure — never reload, re-click, work around, or fix the app (these hide bugs); accept reasonable phrasing/capitalization variations when matching strings; never substitute judgment over the test plan. Plus operational limits: step budget with periodic remaining-budget reminders, and browser-output condensation (cheap-model compression of page snapshots) to control context growth on long Tier 3 plans.
+- 📋 **UI/API-driven seeding** — test-plan preconditions are established through the app itself: the agent signs up the test accounts and creates the named records via the UI, or replays captured create requests via the v0.4 interception layer once observed (faster, less flaky). No database access is assumed — apps live on tool infrastructure. Corpus-authoring rule: precondition sections must be UI-seedable (e.g. use relative dates rather than requiring pre-existing historical state).
+- 📋 **Evaluator reliability gate (automated)** — duplicate-run protocol: F14 runs twice on a rotating sample of submissions; step-level self-agreement is published with each leaderboard release. F14's inclusion in the composite is gated on ≥95% self-agreement — the automated analogue of ViBench's 99% human-agreement bar. Disagreeing steps feed back into evaluator-prompt and test-plan-wording fixes.
+
+### Corpus
+
+- 📋 **2–4 Tier 3 prompts adapted from ViBench apps** (candidates: barber scheduler, link-based marketplace, collaborative kanban, two-role wedding-venue platform — the last doubles as a role-bearing prompt for S5). Adaptation = reworded into webappbench's user-style prompt format, all named values replaced (limits contamination matching, keeps F6 meaningful), preconditions rewritten to be UI-seedable. Apache 2.0 attribution in prompt YAML + README. Contamination caveat documented; adapted prompts are subject to the auto-retirement proposal if they saturate suspiciously fast relative to original prompts.
+- 📋 **Fully-functional flag extended to test plans** — once F14 ships, the v0.4 fully-functional flag additionally requires every test plan at 100% for prompts that carry plans.
+
+### Failure analytics
+
+- 📋 **Automated failure-mode taxonomy in `audit`** — LLM categorization of failing scorers and failed test-plan steps into a fixed taxonomy (adapted from ViBench's: specification / implementation / verification / integration classes with ~10 fine-grained categories tuned to sitebuilder failure modes), appended to `audit.md` and aggregated across submissions into per-tool failure distributions. Turns per-submission audits into cross-tool failure analytics with zero human labeling.
+
+---
+
+## v0.6 — Iterative / feature-extension track
+
+Focus: measure what happens when a tool extends an app it already built — the most realistic usage pattern, and the one single-shot scoring can't see. Promoted from 💤 deferred (was "Multi-turn iterative track (T4, T5)"), motivated by ViBench's Vibe-on-Vibe result: 7 of 9 models lose fully-correct artifacts when extending their own output vs. a stable reference, and complete-failure rates more than double for most — errors compound across builds, and first-pass scores overestimate practical reliability.
+
+- 📋 **Feature-extension submission flow** — manual two-phase submission, consistent with the no-automated-signup policy: (1) the base prompt produces the MVP submission, scored as today; (2) a follow-up feature prompt is run in the same tool session, and the resulting URL/ZIP is submitted as a linked artifact (`extends: <run-id>` in `submissions.yaml`). No session automation required from the harness.
+- 📋 **Regression + feature test plans** — each feature prompt ships one regression plan (verifies base functionality is intact after the extension, navigating any layout/auth changes the feature introduces) and ≥1 feature plan (verifies the new behavior). Both executed by F14. Structure adopted from ViBench's feature-extension tests.
+- 📋 **Degradation metrics** — per-tool delta between the MVP run's functional score and the post-extension regression score, plus a fully-functional rate across the extension chain. Published as an "error compounding" leaderboard column on the extension track. Extension-track scores reported separately from the single-shot leaderboard; no change to existing composites.
+
 ---
 
 ## Deferred indefinitely
@@ -246,7 +295,7 @@ Provisional additive weights (within-dimension): F9 6, F10 4, F11 3, F12 3, F13 
 Items the research design explicitly de-prioritizes or that don't pay back the implementation cost. Not committed to any release.
 
 - 💤 **V5** animation/interaction polish — research rates this as "noise below the top quintile"
-- 💤 **Multi-turn iterative track (T4, T5)** — would require session-state management across turns and significant adapter complexity
+- ➡️ **Multi-turn iterative track (T4, T5)** — *moved to v0.6* as the feature-extension track. The original blocker (session-state management across turns, adapter complexity) is sidestepped by the manual two-phase submission flow; ViBench's Vibe-on-Vibe error-compounding result supplied the motivation to promote it.
 - 💤 **Private prompt split + contamination rotation** — only needed once public scores stabilize and contamination becomes a real risk
 - 💤 **Live tool-drift time series** — operational concern; needs weekly runner infrastructure that doesn't exist yet
 
@@ -271,7 +320,7 @@ These are harness-level rules — not scorers — that protect the leaderboard's
 ### Other research positions
 
 - 💡 **Prompt-robustness track** — tests how tools handle ambiguous / self-contradictory prompts; novel dimension.
-- 💡 **Structured self-repair sub-track** (LiveCodeBench pattern) — deterministic test-trace injection as the next turn, instead of free-form follow-ups. Refines the iterative track that's currently deferred.
+- 💡 **Structured self-repair sub-track** (LiveCodeBench pattern) — deterministic test-trace injection as the next turn, instead of free-form follow-ups. To be reconciled with the v0.6 feature-extension track when that track is designed: self-repair (fix what you broke, given the failure trace) and feature extension (build more on top) are distinct second turns and may become sibling sub-tracks sharing the two-phase submission flow.
 
 ---
 
