@@ -1,7 +1,7 @@
 import type { APIRequestContext, Browser } from '@playwright/test';
 import type { ScorerContext, ScorerResult } from '../types.ts';
 import { captureDataResponses, extractIdentifier, errMsg, type CapturedDataResponse } from '../backend/auth.ts';
-import { login, createContact } from '../backend/login.ts';
+import { login, createContact, applyCachedSession } from '../backend/login.ts';
 
 // Replay a captured data request (GET or POST/RPC) through a given browser
 // context's request API, so that context's session cookies/headers ride along.
@@ -91,6 +91,7 @@ export async function runS4(ctx: ScorerContext): Promise<ScorerResult> {
   let bIdentifier: string | null = null;
   const seedMarker = `S4_PROBE_${ctx.submission.runIdx}_${Date.now().toString(36)}`;
   try {
+    await applyCachedSession(ctxB, backend.userB);
     const pageB = await ctxB.newPage();
     const loginB = await login(pageB, url, backend.userB);
     if (!loginB.ok) {
@@ -155,6 +156,7 @@ export async function runS4(ctx: ScorerContext): Promise<ScorerResult> {
   // dashboard data response, and check whether B's marker appears in it.
   const ctxA = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   try {
+    await applyCachedSession(ctxA, backend.userA);
     const pageA = await ctxA.newPage();
     const captureA = captureDataResponses(pageA);
     const loginA = await login(pageA, url, backend.userA);

@@ -24,7 +24,7 @@ import { runS3, S3_VERSION } from './security/s3-vuln.ts';
 import { runS4, S4_VERSION } from './security/s4-backend.ts';
 import { runF7, F7_VERSION } from './functional/f7-auth-roundtrip.ts';
 import { runF8, F8_VERSION } from './functional/f8-cross-session.ts';
-import { login, deleteAllContacts, createContact } from './backend/login.ts';
+import { login, deleteAllContacts, createContact, applyCachedSession } from './backend/login.ts';
 import type { Account } from '../core/backend.ts';
 import { runC9, C9_VERSION } from './code-quality/c9-seo.ts';
 import { runV1, V1_VERSION } from './visual/v1-judge.ts';
@@ -276,6 +276,7 @@ async function captureAuthenticatedScreenshots(
 ): Promise<void> {
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   try {
+    await applyCachedSession(ctx, account);
     const page = await ctx.newPage();
     const outcome = await login(page, url, account);
     if (!outcome.ok) return;
@@ -288,8 +289,17 @@ async function captureAuthenticatedScreenshots(
     // before a create poisons the create on hydration-sensitive SPAs). The empty
     // state ("No contacts yet") is verified deterministically by F6 from source,
     // so we deliberately don't try to screenshot it here.
-    await createContact(page, 'Sample Contact').catch(() => undefined);
-    await page.waitForTimeout(1000);
+    const marker = 'Sample Contact';
+    await createContact(page, marker).catch(() => undefined);
+    // Wait for the created row to actually render before screenshotting — without
+    // this we can capture the still-empty list (the create is async) and the
+    // judge wrongly reports "Contact list display / Delete control missing".
+    await page
+      .getByText(marker, { exact: false })
+      .first()
+      .waitFor({ state: 'visible', timeout: 8_000 })
+      .catch(() => undefined);
+    await page.waitForTimeout(500);
     await page.screenshot({ path: join(screenshotsDir, 'dashboard.png'), fullPage: true }).catch(() => undefined);
     // No teardown here — a single account cleanup runs at the very end of the
     // submission, so nothing deletes another scorer's in-flight test data.
@@ -301,6 +311,7 @@ async function captureAuthenticatedScreenshots(
   // Mobile dashboard in its own context.
   const mctx = await browser.newContext({ viewport: { width: 360, height: 800 } });
   try {
+    await applyCachedSession(mctx, account);
     const page = await mctx.newPage();
     const outcome = await login(page, url, account);
     if (!outcome.ok) return;
@@ -325,6 +336,7 @@ async function cleanupTestAccounts(
   for (const account of accounts) {
     const ctx = await browser.newContext();
     try {
+      await applyCachedSession(ctx, account);
       const page = await ctx.newPage();
       const outcome = await login(page, url, account);
       if (outcome.ok) {

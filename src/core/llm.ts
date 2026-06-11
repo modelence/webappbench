@@ -13,6 +13,11 @@ export function getLlmClient(): OpenAI {
     _client = new OpenAI({
       baseURL: OPENROUTER_BASE_URL,
       apiKey,
+      // Bound each request so a hung provider (e.g. an OpenRouter upstream that
+      // accepts the request then never streams content) fails fast instead of
+      // blocking a scorer for minutes. The SDK retries the timed-out/5xx call.
+      timeout: 90_000,
+      maxRetries: 2,
       defaultHeaders: {
         'HTTP-Referer': 'https://github.com/modelence/benchmark',
         'X-Title': 'AI Sitebuilder Benchmark',

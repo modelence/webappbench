@@ -104,14 +104,12 @@ export async function runF4(ctx: ScorerContext): Promise<ScorerResult> {
     (c) => `- ${c.id}: ${c.label} — ${c.description}`,
   ).join('\n');
 
-  const namedFeatures = [
-    ...ctx.prompt.mustHave.map((c) => c.id),
-    ...ctx.prompt.shouldHave.map((c) => c.id),
-  ];
-  const namedFeaturesBlock = namedFeatures.length > 0
-    ? `\nFeatures named in the acceptance criteria (each should be visibly present):\n${namedFeatures.map((f) => `  - ${f}`).join('\n')}\n`
-    : '';
-
+  // NOTE: we deliberately do NOT feed the raw acceptance-criteria IDs (f2's
+  // domain) to this judge. Several — e.g. `password_field_present` — live behind
+  // a click (the login form opens from a "Sign In" splash) and never appear on a
+  // single screenshot, so asking a screenshot judge to confirm them guarantees a
+  // false "missing". f2 verifies those deterministically. f4 judges what the
+  // screenshots actually show, against the human-readable checklist below.
   const userText = `Tool: ${ctx.submission.tool}
 Prompt id: ${ctx.prompt.id}
 
@@ -119,11 +117,11 @@ Original prompt given to the sitebuilder:
 """
 ${ctx.prompt.prompt.trim()}
 """
-${namedFeaturesBlock}
+
 Score each of the following criteria from 1 to 5:
 ${criteriaList}
 
-If any feature explicitly named in the prompt is absent from the screenshots, list it in "missing_features".
+If a feature named in the prompt is genuinely absent from the screenshots, list it in "missing_features". Do NOT list a feature as missing merely because it would live behind a click not shown here (e.g. a password field on a login form reached via a "Sign In" button) — judge only what the screenshots can reasonably show.
 
 Respond with JSON only.`;
 
@@ -136,29 +134,47 @@ Respond with JSON only.`;
       },
     ]);
 
-    const response = await client.chat.completions.create({
-      model,
-      max_tokens: 4096,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: [{ type: 'text', text: userText }, ...imageContent],
-        },
-      ],
-    });
-
-    const raw = response.choices[0]?.message?.content ?? '';
-    let judgeOutput: JudgeOutput;
-    try {
-      judgeOutput = parseJudgeOutput(raw);
-    } catch (err) {
+    // Some providers (seen with gemini-2.5-pro via OpenRouter) occasionally
+    // return HTTP 200 with EMPTY or non-JSON content — which the SDK's own retry
+    // doesn't catch (it's not an error status). Retry a couple of times on an
+    // empty/unparseable body before giving up, so a transient blank response
+    // doesn't drop f4 to N/A when the screenshots are perfectly judgeable.
+    let raw = '';
+    let judgeOutput: JudgeOutput | null = null;
+    let lastErr: unknown = null;
+    let usage: import('openai').OpenAI.Completions.CompletionUsage | null = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const response = await client.chat.completions.create({
+        model,
+        max_tokens: 4096,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          {
+            role: 'user',
+            content: [{ type: 'text', text: userText }, ...imageContent],
+          },
+        ],
+      });
+      usage = (response.usage ?? null) as typeof usage;
+      raw = response.choices[0]?.message?.content ?? '';
+      if (raw.trim()) {
+        try {
+          judgeOutput = parseJudgeOutput(raw);
+          break;
+        } catch (err) {
+          lastErr = err;
+        }
+      } else {
+        lastErr = new Error('Model returned empty content');
+      }
+    }
+    if (!judgeOutput) {
       await writeJson(join(ctx.paths.root, 'f4-judge.json'), {
         model,
         raw,
-        parseError: err instanceof Error ? err.message : String(err),
+        parseError: lastErr instanceof Error ? lastErr.message : String(lastErr),
       });
-      throw err;
+      throw lastErr instanceof Error ? lastErr : new Error('f4 judge failed');
     }
 
     await writeJson(join(ctx.paths.root, 'f4-judge.json'), { model, raw, parsed: judgeOutput });
@@ -185,7 +201,7 @@ Respond with JSON only.`;
         missingFeatures: judgeOutput.missing_features ?? [],
         overallNotes: judgeOutput.overall_notes ?? null,
         screenshotsUsed: screenshots.length,
-        usage: response.usage ?? null,
+        usage: usage ?? null,
         elapsedMs: Date.now() - start,
       },
     };

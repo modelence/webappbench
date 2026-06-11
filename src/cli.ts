@@ -176,7 +176,7 @@ program
 interface ScoreOptions {
   prompt?: string;
   run?: number;
-  scorer?: string[];
+  scorer?: string;
   config: string;
   corpus: string;
   artifacts: string;
@@ -245,7 +245,7 @@ async function scoreFromConfig(tool: ToolName | undefined, opts: ScoreOptions): 
     const outcome = await runOne(entry, {
       corpusDir: opts.corpus,
       artifactsRoot: opts.artifacts,
-      only: opts.scorer ? opts.scorer.flatMap(s => s.split(',').map(x => x.trim())) : undefined,
+      only: opts.scorer ? opts.scorer.split(',').map(x => x.trim()).filter(Boolean) : undefined,
     });
     if (outcome.ok) {
       okCount += 1;

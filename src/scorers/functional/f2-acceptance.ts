@@ -1,6 +1,7 @@
 import type { Locator, Page } from '@playwright/test';
 import type { AcceptanceCriterion, SetupAction } from '../../core/types.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
+import { revealLoginForm } from '../backend/login.ts';
 
 export const F2_VERSION = '0.3.0';
 
@@ -25,11 +26,12 @@ export async function runF2(ctx: ScorerContext): Promise<ScorerResult> {
   const start = Date.now();
   const outcomes: CriterionOutcome[] = [];
 
+  const url = ctx.submission.artifactUrl;
   for (const c of ctx.prompt.mustHave) {
-    outcomes.push(await evalCriterion(ctx.page, c, 'must'));
+    outcomes.push(await evalCriterion(ctx.page, c, 'must', url));
   }
   for (const c of ctx.prompt.shouldHave) {
-    outcomes.push(await evalCriterion(ctx.page, c, 'should'));
+    outcomes.push(await evalCriterion(ctx.page, c, 'should', url));
   }
 
   const mustTotal = ctx.prompt.mustHave.length;
@@ -63,10 +65,11 @@ async function evalCriterion(
   page: Page,
   c: AcceptanceCriterion,
   kind: 'must' | 'should',
+  url: string,
 ): Promise<CriterionOutcome> {
   try {
     if (c.setup && c.setup.length > 0) {
-      const setupErr = await runSetup(page, c.setup);
+      const setupErr = await runSetup(page, c.setup, url);
       if (setupErr) {
         return { id: c.id, kind, passed: false, note: `setup failed: ${setupErr}` };
       }
@@ -96,12 +99,12 @@ async function evalCriterion(
 // Runs setup actions sequentially against the page. Returns an error string
 // describing the first action that failed, or null on success. Used by stateful
 // prompts to drive the page into a specific state before the locator runs.
-async function runSetup(page: Page, actions: SetupAction[]): Promise<string | null> {
+async function runSetup(page: Page, actions: SetupAction[], url: string): Promise<string | null> {
   for (let i = 0; i < actions.length; i++) {
     const action = actions[i]!;
     const label = `step ${i + 1} (${action.kind})`;
     try {
-      await runSetupStep(page, action);
+      await runSetupStep(page, action, url);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return `${label}: ${msg.slice(0, 200)}`;
@@ -110,7 +113,7 @@ async function runSetup(page: Page, actions: SetupAction[]): Promise<string | nu
   return null;
 }
 
-async function runSetupStep(page: Page, action: SetupAction): Promise<void> {
+async function runSetupStep(page: Page, action: SetupAction, url: string): Promise<void> {
   switch (action.kind) {
     case 'evaluate': {
       // The expression is passed as a string so prompt authors can write
@@ -155,6 +158,13 @@ async function runSetupStep(page: Page, action: SetupAction): Promise<void> {
     case 'waitFor': {
       const locator = buildLocator(page, action.locator);
       await locator.first().waitFor({ state: 'visible', timeout: SETUP_LOCATOR_TIMEOUT_MS });
+      return;
+    }
+    case 'revealLoginForm': {
+      // Click through a marketing splash to the actual login form (a "Sign In"
+      // button at `/` and the form at /login). No-op when the form is already
+      // on the page. Shared with the F7/F8/S4 login driver.
+      await revealLoginForm(page, url);
       return;
     }
   }
