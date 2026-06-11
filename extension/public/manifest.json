@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "WebAppBench Collector",
+  "version": "0.1.0",
+  "description": "Apply WebAppBench prompts to AI sitebuilders and collect execution duration and cost.",
+  "permissions": ["storage", "activeTab", "tabs"],
+  "host_permissions": ["https://app.base44.com/*", "https://base44.com/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "WebAppBench Collector"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://app.base44.com/*", "https://base44.com/*"],
+      "js": ["src/content/base44.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://app.base44.com/*", "https://base44.com/*"],
+      "js": ["src/content/base44-main.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    }
+  ]
+}

@@ -282,7 +282,7 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
       case 'cost': {
         const ttfr = d['ttfrMs'] as number | null;
         const ttwb = d['ttwbMs'] as number | null;
-        const usd = d['usdEstimate'] as number | null;
+        const usd = d['cost'] as number | null;
         if (ttfr == null && ttwb == null && usd == null) return 'no data';
         const parts: string[] = [];
         if (ttfr != null) parts.push(`TTFR ${(ttfr / 1000).toFixed(1)}s`);

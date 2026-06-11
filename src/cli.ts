@@ -113,8 +113,7 @@ interface SubmitOptions {
   promptSubmittedAt?: string;
   firstRenderAt?: string;
   workingBuildAt?: string;
-  credits?: number;
-  usd?: number;
+  cost?: number;
   note?: string;
 }
 
@@ -132,8 +131,7 @@ program
   .option('--prompt-submitted-at <iso>', 'User-reported ISO time prompt was sent')
   .option('--first-render-at <iso>', 'User-reported ISO time first preview appeared')
   .option('--working-build-at <iso>', 'User-reported ISO time build looked correct')
-  .option('--credits <n>', 'User-reported credits spent', parseNonNegativeFloat)
-  .option('--usd <n>', 'User-reported USD cost estimate', parseNonNegativeFloat)
+  .option('--cost <n>', 'User-reported approximate USD cost of the run', parseNonNegativeFloat)
   .option('--note <text>', 'Free-text note stored with cost data')
   .action(async (opts: SubmitOptions) => {
     const { submission, prompt, paths } = await createSubmissionArtifact({
@@ -311,8 +309,7 @@ function userReportedTimingFrom(opts: SubmitOptions): UserReportedTiming | undef
 
 function userReportedCostFrom(opts: SubmitOptions): UserReportedCost | undefined {
   const c: UserReportedCost = {};
-  if (opts.credits !== undefined) c.credits = opts.credits;
-  if (opts.usd !== undefined) c.usdEstimate = opts.usd;
+  if (opts.cost !== undefined) c.cost = opts.cost;
   if (opts.note) c.notes = opts.note;
   return Object.keys(c).length > 0 ? c : undefined;
 }

@@ -12,7 +12,7 @@ export async function runCost(submission: Submission, paths: ArtifactPaths): Pro
   const ttfrMs = diffMsOrNull(timing?.promptSubmittedAt, timing?.firstRenderAt);
   const ttwbMs =
     diffMsOrNull(timing?.promptSubmittedAt, timing?.workingBuildAt) ??
-    secToMsOrNull(timing?.buildSeconds);
+    secToMsOrNull(timing?.duration);
 
   const payload = {
     source: 'user-reported' as const,
@@ -21,14 +21,13 @@ export async function runCost(submission: Submission, paths: ArtifactPaths): Pro
     workingBuildAt: timing?.workingBuildAt ?? null,
     ttfrMs,
     ttwbMs,
-    credits: cost?.credits ?? null,
-    usdEstimate: cost?.usdEstimate ?? null,
+    cost: cost?.cost ?? null,
     notes: cost?.notes ?? null,
   };
   await writeJson(paths.cost, payload);
 
   const hasAnyTiming = ttfrMs !== null || ttwbMs !== null;
-  const hasAnyCost = cost?.credits !== undefined || cost?.usdEstimate !== undefined;
+  const hasAnyCost = cost?.cost !== undefined;
 
   return {
     scorer: 'cost',

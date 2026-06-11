@@ -92,14 +92,13 @@ function timingFromEntry(e: SubmissionConfigEntry): UserReportedTiming | undefin
   if (e.promptSubmittedAt) t.promptSubmittedAt = e.promptSubmittedAt;
   if (e.firstRenderAt) t.firstRenderAt = e.firstRenderAt;
   if (e.workingBuildAt) t.workingBuildAt = e.workingBuildAt;
-  if (e.buildSeconds !== undefined) t.buildSeconds = e.buildSeconds;
+  if (e.duration !== undefined) t.duration = e.duration;
   return Object.keys(t).length > 0 ? t : undefined;
 }
 
 function costFromEntry(e: SubmissionConfigEntry): UserReportedCost | undefined {
   const c: UserReportedCost = {};
-  if (e.credits !== undefined) c.credits = e.credits;
-  if (e.usd !== undefined) c.usdEstimate = e.usd;
+  if (e.cost !== undefined) c.cost = e.cost;
   if (e.note) c.notes = e.note;
   return Object.keys(c).length > 0 ? c : undefined;
 }

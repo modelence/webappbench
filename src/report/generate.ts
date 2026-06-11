@@ -38,7 +38,7 @@ export async function generateReport(
 
 /**
  * Generation duration for a run: the cost scorer's time-to-working-build
- * (user-reported buildSeconds or workingBuildAt − promptSubmittedAt).
+ * (user-reported duration or workingBuildAt − promptSubmittedAt).
  */
 function genDurationMs(scores: Record<string, ScorerResult>): number | null {
   const ttwbMs = scores['cost']?.details?.['ttwbMs'];
@@ -320,7 +320,7 @@ function renderHtml(runs: RunSummary[], version: string): string {
   };
 
   const dimHeaders = visibleDims.map(thWithTooltip).join('');
-  const durationHeader = `<th data-tip="Generation duration: how long the tool took to produce a working build (user-reported buildSeconds). Informational only — not included in composite score.">Duration</th>`;
+  const durationHeader = `<th data-tip="Generation duration: how long the tool took to produce a working build (user-reported duration). Informational only — not included in composite score.">Duration</th>`;
 
   // Four dimension columns shown between the composite and the per-scorer
   // columns. Order matches DIMENSION_ORDER (Functional → Code → Visual →

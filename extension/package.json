@@ -1,0 +1,11 @@
+{
+  "name": "webappbench-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Chrome extension that applies WebAppBench prompts to AI sitebuilders and collects execution duration and cost.",
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/copy-static.mjs && node scripts/build-prompts.mjs",
+    "test": "npm run build && node --test 'dist/test/*.test.js'"
+  }
+}

@@ -39,6 +39,8 @@
   "scripts": {
     "typecheck": "tsc",
     "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "build:extension": "npm run build --prefix extension",
+    "test:extension": "npm test --prefix extension",
     "bench": "tsx src/cli.ts",
     "prepublishOnly": "npm run build"
   },
@@ -58,6 +60,7 @@
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
+    "@types/chrome": "^0.1.43",
     "@types/node": "^20.17.10",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
