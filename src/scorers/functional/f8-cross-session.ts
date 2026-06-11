@@ -1,6 +1,6 @@
 import type { Browser } from '@playwright/test';
 import type { ScorerContext, ScorerResult } from '../types.ts';
-import { login, createContact } from '../backend/login.ts';
+import { login, createContact, applyCachedSession } from '../backend/login.ts';
 
 export const F8_VERSION = '0.1.0';
 
@@ -31,6 +31,7 @@ export async function runF8(ctx: ScorerContext): Promise<ScorerResult> {
   // of the login screen and breaking the login form lookup.
   const contextA = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   try {
+    await applyCachedSession(contextA, userA);
     const pageA = await contextA.newPage();
     const loginA = await login(pageA, url, userA);
     steps.push({ step: 'context_a_login', ok: loginA.ok, note: loginA.reason });
@@ -43,6 +44,10 @@ export async function runF8(ctx: ScorerContext): Promise<ScorerResult> {
     // Context B: a second fresh incognito context with clean storage.
     const contextB = await browser.newContext({ viewport: { width: 1440, height: 900 } });
     try {
+      // Cookies-only: restore the auth session so context B doesn't re-trigger
+      // the OTP challenge, but keep its localStorage clean so a localStorage-only
+      // "backend" can't fake cross-session persistence (that's what F8 detects).
+      await applyCachedSession(contextB, userA, { cookiesOnly: true });
       const pageB = await contextB.newPage();
       const loginB = await login(pageB, url, userA);
       steps.push({ step: 'context_b_login', ok: loginB.ok, note: loginB.reason });

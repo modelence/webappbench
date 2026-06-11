@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { getLlmClient, DEFAULT_JUDGE_MODEL } from '../../core/llm.ts';
+import { getLlmClient, DEFAULT_JUDGE_MODEL, createJudgeCompletion } from '../../core/llm.ts';
 import { writeJson } from '../../core/artifact.ts';
 import type { ChecklistConfig, ChecklistItem } from '../../core/types.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
@@ -41,6 +41,7 @@ interface ScreenshotEntry {
 // proven sticky/fixed (and any element absent from the top has scrolled away).
 const SCREENSHOTS: ScreenshotEntry[] = [
   { name: 'initial', caption: 'Full-page screenshot at the top of the document (scroll = 0).' },
+  { name: 'login-form', caption: 'The login form reached from the landing page (backend apps only; absent for apps with no auth). Use THIS to confirm auth fields like the email and password inputs — they live here, not on the marketing landing page.' },
   { name: 'viewport-mobile', caption: 'Viewport-sized capture at mobile width (360x800).' },
   { name: 'scrolled-viewport', caption: 'Viewport-sized capture AFTER scrolling 800px down. Any element visible at the top of this image is sticky or fixed; any element described in the prompt as "sticky" but absent from the top here is NOT sticky.' },
   { name: 'mid-scroll', caption: 'Viewport-sized capture scrolled to roughly the middle of the page.' },
@@ -104,14 +105,12 @@ export async function runF4(ctx: ScorerContext): Promise<ScorerResult> {
     (c) => `- ${c.id}: ${c.label} — ${c.description}`,
   ).join('\n');
 
-  const namedFeatures = [
-    ...ctx.prompt.mustHave.map((c) => c.id),
-    ...ctx.prompt.shouldHave.map((c) => c.id),
-  ];
-  const namedFeaturesBlock = namedFeatures.length > 0
-    ? `\nFeatures named in the acceptance criteria (each should be visibly present):\n${namedFeatures.map((f) => `  - ${f}`).join('\n')}\n`
-    : '';
-
+  // NOTE: we deliberately do NOT feed the raw acceptance-criteria IDs (f2's
+  // domain) to this judge. Several — e.g. `password_field_present` — live behind
+  // a click (the login form opens from a "Sign In" splash) and never appear on a
+  // single screenshot, so asking a screenshot judge to confirm them guarantees a
+  // false "missing". f2 verifies those deterministically. f4 judges what the
+  // screenshots actually show, against the human-readable checklist below.
   const userText = `Tool: ${ctx.submission.tool}
 Prompt id: ${ctx.prompt.id}
 
@@ -119,11 +118,11 @@ Original prompt given to the sitebuilder:
 """
 ${ctx.prompt.prompt.trim()}
 """
-${namedFeaturesBlock}
+
 Score each of the following criteria from 1 to 5:
 ${criteriaList}
 
-If any feature explicitly named in the prompt is absent from the screenshots, list it in "missing_features".
+If a feature named in the prompt is genuinely absent from the screenshots, list it in "missing_features". Do NOT list a feature as missing merely because it would live behind a click not shown here (e.g. a password field on a login form reached via a "Sign In" button) — judge only what the screenshots can reasonably show.
 
 Respond with JSON only.`;
 
@@ -136,32 +135,29 @@ Respond with JSON only.`;
       },
     ]);
 
-    const response = await client.chat.completions.create({
+    // createJudgeCompletion retries on empty 200s and falls back to a second
+    // vision model if the primary keeps coming up empty. `usedModel` is whichever
+    // actually produced the content (may differ from `model`). Parsing stays here.
+    const { raw, usage, model: usedModel } = await createJudgeCompletion(client, {
       model,
-      max_tokens: 4096,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: [{ type: 'text', text: userText }, ...imageContent],
-        },
+        { role: 'user', content: [{ type: 'text', text: userText }, ...imageContent] },
       ],
     });
-
-    const raw = response.choices[0]?.message?.content ?? '';
     let judgeOutput: JudgeOutput;
     try {
       judgeOutput = parseJudgeOutput(raw);
     } catch (err) {
       await writeJson(join(ctx.paths.root, 'f4-judge.json'), {
-        model,
+        model: usedModel,
         raw,
         parseError: err instanceof Error ? err.message : String(err),
       });
       throw err;
     }
 
-    await writeJson(join(ctx.paths.root, 'f4-judge.json'), { model, raw, parsed: judgeOutput });
+    await writeJson(join(ctx.paths.root, 'f4-judge.json'), { model: usedModel, raw, parsed: judgeOutput });
 
     const scored = judgeOutput.criteria
       .map((c) => ({ ...c, score: Number(c.score) }))
@@ -177,7 +173,7 @@ Respond with JSON only.`;
       passed: normalised !== null ? normalised >= 0.5 : null,
       score: normalised,
       details: {
-        model,
+        model: usedModel,
         meanRaw: meanScore !== null ? Number(meanScore.toFixed(2)) : null,
         criteria: scored,
         criteriaTotal: criteria.length,
@@ -185,7 +181,7 @@ Respond with JSON only.`;
         missingFeatures: judgeOutput.missing_features ?? [],
         overallNotes: judgeOutput.overall_notes ?? null,
         screenshotsUsed: screenshots.length,
-        usage: response.usage ?? null,
+        usage: usage ?? null,
         elapsedMs: Date.now() - start,
       },
     };

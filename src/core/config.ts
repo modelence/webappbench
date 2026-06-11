@@ -31,6 +31,7 @@ const entrySchema = z.object({
   promptSubmittedAt: z.string().datetime().optional(),
   firstRenderAt: z.string().datetime().optional(),
   workingBuildAt: z.string().datetime().optional(),
+  buildSeconds: z.number().nonnegative().optional(),
   credits: z.number().nonnegative().optional(),
   usd: z.number().nonnegative().optional(),
   note: z.string().optional(),

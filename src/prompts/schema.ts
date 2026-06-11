@@ -11,6 +11,7 @@ const setupActionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('press'), locator: z.string().min(1), key: z.string().min(1) }),
   z.object({ kind: z.literal('reload') }),
   z.object({ kind: z.literal('waitFor'), locator: z.string().min(1) }),
+  z.object({ kind: z.literal('revealLoginForm') }),
 ]);
 
 const acceptanceCriterionSchema = z.object({

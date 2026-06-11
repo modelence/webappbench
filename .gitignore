@@ -8,7 +8,7 @@ artifacts/
 .auth/
 leaderboard.html
 leaderboard.json
-submissions.yaml
+*submissions.yaml
 coverage/
 playwright-report/
 test-results/

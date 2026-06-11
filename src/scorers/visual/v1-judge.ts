@@ -1,12 +1,19 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { getLlmClient, DEFAULT_JUDGE_MODEL } from '../../core/llm.ts';
+import { getLlmClient, createJudgeCompletion } from '../../core/llm.ts';
 import { writeJson } from '../../core/artifact.ts';
 import type { ChecklistConfig, ChecklistItem } from '../../core/types.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
 
-export const V1_VERSION = '0.2.0';
+// Two judges from different providers to mitigate self-preference bias.
+// OPENROUTER_MODEL overrides both (useful for one-off experiments).
+const DEFAULT_JUDGES = [
+  'google/gemini-2.5-pro',
+  'openai/gpt-5.5',
+] as const;
+
+export const V1_VERSION = '0.3.0';
 
 // Default visual-quality criteria, always included.
 const VISUAL_DEFAULTS = [
@@ -45,7 +52,7 @@ interface JudgeOutput {
 // judged on a populated UI).
 const SCREENSHOT_NAMES = ['initial', 'viewport-mobile', 'mid-scroll', 'dashboard'] as const;
 
-const SYSTEM_PROMPT = `You are an expert web design reviewer evaluating AI-generated landing pages.
+const SYSTEM_PROMPT = `You are an expert web design reviewer evaluating AI-generated web applications.
 You will be shown screenshots of a website and asked to score it on specific visual design criteria.
 
 IMPORTANT: Respond ONLY with valid JSON matching this schema exactly:
@@ -56,14 +63,18 @@ IMPORTANT: Respond ONLY with valid JSON matching this schema exactly:
   "overall_notes": "<optional 1-2 sentences>"
 }
 
-Score scale:
-1 = Very poor / unusable
-2 = Below average
-3 = Adequate / average for AI-generated content
-4 = Good, above average
-5 = Excellent / professional quality
+Score scale — use the concrete anchors below, not just the labels:
+1 = Broken or unusable: layout overflows, text illegible, buttons not visible, obviously unfinished
+2 = Below average: functional but visually rough — inconsistent spacing, clashing colours, hard to scan
+3 = Adequate: a competent default. Clean layout, readable text, no obvious errors. Looks like a generic template or a Bootstrap/Tailwind starter with no customisation. This is the expected baseline for AI-generated output.
+4 = Good: clear visual identity beyond the default — a distinctive colour palette, considered typography scale, purposeful spacing rhythm, or a layout that feels designed rather than assembled
+5 = Exceptional: production-quality. Multiple design decisions working together — custom brand character, polished micro-details (icon alignment, hover states, shadow depth), and a cohesive aesthetic that would not look out of place on a real product's marketing site or app. This should be rare.
 
-Be calibrated: a score of 3 is normal for AI-generated sites. Reserve 5 for genuinely impressive work.`;
+Calibration rules:
+- A plain white/light-grey background with default system or generic sans-serif font, no custom colour palette, and no visual character beyond functional layout is a 3, not higher — even if it is clean and bug-free.
+- A score of 4 requires at least one clearly intentional design decision that elevates it above a generic template.
+- A score of 5 requires multiple such decisions working together cohesively. Do not give 5 simply because the design is inoffensive or "professional-looking in a generic sense".
+- Scores of 4 and 5 combined should represent roughly the top 20–30% of well-executed designs. If you find yourself giving mostly 4s and 5s, recalibrate.`;
 
 export async function runV1(ctx: ScorerContext): Promise<ScorerResult> {
   const start = Date.now();
@@ -92,7 +103,9 @@ export async function runV1(ctx: ScorerContext): Promise<ScorerResult> {
     };
   }
 
-  const model = process.env['OPENROUTER_MODEL'] ?? DEFAULT_JUDGE_MODEL;
+  // OPENROUTER_MODEL overrides to a single model (useful for experiments).
+  const modelOverride = process.env['OPENROUTER_MODEL'];
+  const models = modelOverride ? [modelOverride] : [...DEFAULT_JUDGES];
 
   const criteria = buildCriteria(ctx.prompt.visualChecklist);
   const criteriaList = criteria.map(
@@ -110,80 +123,100 @@ ${criteriaList}
 
 Respond with JSON only.`;
 
-  try {
-    const imageContent = screenshots.map((b64) => ({
-      type: 'image_url' as const,
-      image_url: { url: `data:image/png;base64,${b64}`, detail: 'low' as const },
-    }));
+  const imageContent = screenshots.map((b64) => ({
+    type: 'image_url' as const,
+    image_url: { url: `data:image/png;base64,${b64}`, detail: 'low' as const },
+  }));
 
-    const response = await client.chat.completions.create({
-      model,
-      max_tokens: 4096,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        {
-          role: 'user',
-          content: [{ type: 'text', text: userText }, ...imageContent],
-        },
-      ],
-    });
+  // Run both judges in parallel.
+  const judgeResults = await Promise.all(
+    models.map(async (model) => {
+      try {
+        // No cross-model fallback here: V1 already runs a diverse model PAIR and
+        // averages the survivors, so a per-model fallback would just duplicate the
+        // other judge. Empty-200 retries (within the same model) still apply.
+        const { raw, usage } = await createJudgeCompletion(client, {
+          model,
+          fallbackModel: null,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: [{ type: 'text', text: userText }, ...imageContent] },
+          ],
+        });
+        const parsed = parseJudgeOutput(raw);
+        return { model, raw, parsed, usage, error: null };
+      } catch (err) {
+        return { model, raw: '', parsed: null, usage: null, error: err instanceof Error ? err.message : String(err) };
+      }
+    }),
+  );
 
-    const raw = response.choices[0]?.message?.content ?? '';
-    let judgeOutput: JudgeOutput;
-    try {
-      judgeOutput = parseJudgeOutput(raw);
-    } catch (err) {
-      await writeJson(join(ctx.paths.root, 'v1-judge.json'), {
-        model,
-        raw,
-        parseError: err instanceof Error ? err.message : String(err),
-      });
-      throw err;
-    }
+  await writeJson(join(ctx.paths.root, 'v1-judge.json'), { models, judges: judgeResults });
 
-    await writeJson(join(ctx.paths.root, 'v1-judge.json'), { model, raw, parsed: judgeOutput });
-
-    const scored = judgeOutput.criteria
-      .map((c) => ({ ...c, score: Number(c.score) }))
-      .filter((c) => c.score >= 1 && c.score <= 5);
-    const meanScore = scored.length > 0
-      ? scored.reduce((s, c) => s + c.score, 0) / scored.length
-      : null;
-    const normalised = meanScore !== null ? (meanScore - 1) / 4 : null;
-
-    const usage = response.usage;
-
-    return {
-      scorer: 'v1',
-      version: V1_VERSION,
-      passed: normalised !== null ? normalised >= 0.5 : null,
-      score: normalised,
-      details: {
-        model,
-        meanRaw: meanScore !== null ? Number(meanScore.toFixed(2)) : null,
-        criteria: scored,
-        criteriaTotal: criteria.length,
-        criteriaExtras: ctx.prompt.visualChecklist.extra.length,
-        placeholderCopy: ctx.prompt.visualChecklist.placeholderCopy,
-        overallNotes: judgeOutput.overall_notes ?? null,
-        screenshotsUsed: screenshots.length,
-        usage: usage ?? null,
-        elapsedMs: Date.now() - start,
-      },
-    };
-  } catch (err) {
+  // Aggregate: average each criterion score across judges that succeeded,
+  // then average across criteria for the final mean.
+  const successfulJudges = judgeResults.filter((j) => j.parsed !== null);
+  if (successfulJudges.length === 0) {
     return {
       scorer: 'v1',
       version: V1_VERSION,
       passed: null,
       score: null,
       details: {
-        model,
+        models,
         elapsedMs: Date.now() - start,
-        error: err instanceof Error ? err.message : String(err),
+        error: judgeResults.map((j) => `${j.model}: ${j.error}`).join('; '),
       },
     };
   }
+
+  // Per-criterion mean across judges, then flag disagreements (>1 point apart).
+  const criterionIds = criteria.map((c) => c.id);
+  const aggregated = criterionIds.map((id) => {
+    const perJudge = successfulJudges.flatMap((j) => {
+      const c = j.parsed!.criteria.find((x) => x.id === id);
+      if (!c) return [];
+      const score = Number(c.score);
+      if (score < 1 || score > 5) return [];
+      return [{ model: j.model, score, rationale: c.rationale }];
+    });
+    if (perJudge.length === 0) return null;
+    const mean = perJudge.reduce((s, c) => s + c.score, 0) / perJudge.length;
+    const max = Math.max(...perJudge.map((c) => c.score));
+    const min = Math.min(...perJudge.map((c) => c.score));
+    return { id, meanScore: mean, disagreement: max - min > 1, perJudge };
+  }).filter((c): c is NonNullable<typeof c> => c !== null);
+
+  const overallMean = aggregated.length > 0
+    ? aggregated.reduce((s, c) => s + c.meanScore, 0) / aggregated.length
+    : null;
+  const normalised = overallMean !== null ? (overallMean - 1) / 4 : null;
+  const disagreements = aggregated.filter((c) => c.disagreement).map((c) => c.id);
+
+  const overallNotes = successfulJudges
+    .map((j) => j.parsed?.overall_notes)
+    .filter(Boolean)
+    .join(' | ');
+
+  return {
+    scorer: 'v1',
+    version: V1_VERSION,
+    passed: normalised !== null ? normalised >= 0.5 : null,
+    score: normalised,
+    details: {
+      models,
+      judgesSucceeded: successfulJudges.length,
+      meanRaw: overallMean !== null ? Number(overallMean.toFixed(2)) : null,
+      criteria: aggregated,
+      criteriaTotal: criteria.length,
+      criteriaExtras: ctx.prompt.visualChecklist.extra.length,
+      placeholderCopy: ctx.prompt.visualChecklist.placeholderCopy,
+      disagreements,
+      overallNotes: overallNotes || null,
+      screenshotsUsed: screenshots.length,
+      elapsedMs: Date.now() - start,
+    },
+  };
 }
 
 // Builds the per-prompt criteria list:

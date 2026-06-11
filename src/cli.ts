@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Command, InvalidArgumentError } from 'commander';
 import { loadDotenv } from './core/env.ts';
 
 await loadDotenv();
+import { readPackageVersion } from './core/version.ts';
 import { createSubmissionArtifact } from './core/submission.ts';
 import { TOOL_NAME_PATTERN } from './core/types.ts';
 import type { ToolName, UserReportedCost, UserReportedTiming } from './core/types.ts';
@@ -17,23 +17,6 @@ import { runOne } from './scorers/score-all.ts';
 import { loadConfig } from './core/config.ts';
 import { generateReport } from './report/generate.ts';
 import { generateFixReport, generateFixReportRollup } from './report/fix-report.ts';
-
-async function readPackageVersion(): Promise<string> {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [join(here, '..', 'package.json'), join(here, '..', '..', 'package.json')];
-  for (const candidate of candidates) {
-    try {
-      const raw = await readFile(candidate, 'utf8');
-      const parsed = JSON.parse(raw) as { name?: string; version?: string };
-      if (parsed.name === 'webappbench' && typeof parsed.version === 'string') {
-        return parsed.version;
-      }
-    } catch {
-      // try next
-    }
-  }
-  return '0.0.0';
-}
 
 const program = new Command();
 
@@ -176,6 +159,7 @@ program
 interface ScoreOptions {
   prompt?: string;
   run?: number;
+  scorer?: string;
   config: string;
   corpus: string;
   artifacts: string;
@@ -189,6 +173,7 @@ program
   .argument('[tool]', 'Tool name (must have at least one entry in submissions.yaml). Omit to score every entry.', parseToolName)
   .option('-p, --prompt <id>', 'Filter to a single prompt id (requires <tool>)')
   .option('-r, --run <idx>', 'Filter to a single run index (requires <tool>)', parseNonNegativeInt)
+  .option('-s, --scorer <ids>', 'Comma-separated scorer IDs to run (e.g. v1,f4). Omit to run all.')
   .option('-c, --config <path>', 'Submissions config file', 'submissions.yaml')
   .option('-d, --corpus <dir>', 'Corpus directory', 'prompts/corpus')
   .option('-a, --artifacts <dir>', 'Artifacts root', 'artifacts')
@@ -205,10 +190,13 @@ program
   .command('rescore')
   .description('Re-score an existing submission artifact directory in place (does not read submissions.yaml)')
   .argument('<dir>', 'Submission directory (contains submission.json + prompt.json)')
-  .action(async (dir: string) => {
+  .option('-s, --scorer <ids>', 'Comma-separated scorer IDs to run (e.g. v1,f4). Omit to run all.')
+  .action(async (dir: string, opts: { scorer?: string }) => {
+    const only = opts.scorer ? opts.scorer.split(',').map(s => s.trim()) : undefined;
+    if (only) console.log(`Scorer filter: ${only.join(', ')}`);
     console.log(`Scoring ${dir}`);
     const { onProgress, flush } = makeProgressHandler();
-    const { results } = await scoreSubmission(dir, { onProgress });
+    const { results } = await scoreSubmission(dir, { onProgress, only });
     flush();
     const composite = computeComposite(results);
     console.log(`  ${formatComposite(composite)}`);
@@ -240,6 +228,7 @@ async function scoreFromConfig(tool: ToolName | undefined, opts: ScoreOptions): 
     const outcome = await runOne(entry, {
       corpusDir: opts.corpus,
       artifactsRoot: opts.artifacts,
+      only: opts.scorer ? opts.scorer.split(',').map(x => x.trim()).filter(Boolean) : undefined,
     });
     if (outcome.ok) {
       okCount += 1;
@@ -252,20 +241,35 @@ async function scoreFromConfig(tool: ToolName | undefined, opts: ScoreOptions): 
   console.log(`Finished: ${okCount} scored, ${failCount} failed.`);
 
   if (opts.leaderboard) {
-    const runs = await generateReport(opts.artifacts, opts.out);
-    console.log(`Wrote ${opts.out} with ${runs.length} scored run(s)`);
+    const includeOnly = config.runs.map((r) => ({ tool: r.tool, promptId: r.prompt, runIdx: r.runIdx }));
+    const runs = await generateReport(opts.artifacts, opts.out, includeOnly);
+    console.log(`Wrote ${opts.out} with ${runs.length} scored run(s) (entries in ${opts.config} only)`);
   }
   if (failCount > 0) process.exitCode = 1;
 }
 
 program
   .command('leaderboard')
-  .description('Generate leaderboard.html from scored submissions')
+  .description('Generate leaderboard.html from scored submissions. By default only runs listed in submissions.yaml are included; pass --all to include every artifact.')
   .option('-a, --artifacts <dir>', 'Artifacts root', 'artifacts')
   .option('-o, --out <file>', 'Output file', 'leaderboard.html')
-  .action(async (opts: { artifacts: string; out: string }) => {
-    const runs = await generateReport(opts.artifacts, opts.out);
-    console.log(`Wrote ${opts.out} with ${runs.length} scored run(s)`);
+  .option('-c, --config <path>', 'Submissions config used to filter runs', 'submissions.yaml')
+  .option('--all', 'Include every scored artifact, ignoring the submissions config')
+  .action(async (opts: { artifacts: string; out: string; config: string; all?: boolean }) => {
+    let includeOnly: { tool: string; promptId: string; runIdx: number }[] | undefined;
+    if (!opts.all) {
+      try {
+        const config = await loadConfig(opts.config);
+        includeOnly = config.runs.map((r) => ({ tool: r.tool, promptId: r.prompt, runIdx: r.runIdx }));
+      } catch (err) {
+        console.warn(
+          `Could not read ${opts.config} (${err instanceof Error ? err.message : String(err)}); including all artifacts.`,
+        );
+      }
+    }
+    const runs = await generateReport(opts.artifacts, opts.out, includeOnly);
+    const scope = includeOnly ? ` (entries in ${opts.config} only)` : '';
+    console.log(`Wrote ${opts.out} with ${runs.length} scored run(s)${scope}`);
   });
 
 program

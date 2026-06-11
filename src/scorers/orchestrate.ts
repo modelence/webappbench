@@ -24,7 +24,7 @@ import { runS3, S3_VERSION } from './security/s3-vuln.ts';
 import { runS4, S4_VERSION } from './security/s4-backend.ts';
 import { runF7, F7_VERSION } from './functional/f7-auth-roundtrip.ts';
 import { runF8, F8_VERSION } from './functional/f8-cross-session.ts';
-import { login, deleteAllContacts, createContact } from './backend/login.ts';
+import { login, deleteAllContacts, createContact, applyCachedSession, revealLoginForm } from './backend/login.ts';
 import type { Account } from '../core/backend.ts';
 import { runC9, C9_VERSION } from './code-quality/c9-seo.ts';
 import { runV1, V1_VERSION } from './visual/v1-judge.ts';
@@ -42,6 +42,8 @@ export interface ScoreOutput {
 
 export interface ScoreOptions {
   onProgress?: (event: ProgressEvent) => void;
+  // When set, only these scorer IDs are executed; all others are skipped.
+  only?: string[];
 }
 
 export type ProgressEvent =
@@ -77,6 +79,9 @@ export async function scoreSubmission(
     name: string,
     fn: () => Promise<ScorerResult>,
   ): Promise<ScorerResult> => {
+    if (opts.only && !opts.only.includes(name)) {
+      return { scorer: name, version: '0', passed: null, score: null, details: { note: 'skipped (not in --scorer filter)' } };
+    }
     opts.onProgress?.({ kind: 'scorer_start', name });
     const started = Date.now();
     const result = await fn();
@@ -94,7 +99,10 @@ export async function scoreSubmission(
 
   try {
     results['f1'] = await runScorer('f1', () => runF1(ctx));
-    if (results['f1']?.passed) {
+    // When a scorer filter is active, bypass F1's gate — the caller explicitly
+    // requested specific scorers and F1 may legitimately be excluded or failing
+    // due to URL expiry while screenshots from a prior run are still available.
+    if (results['f1']?.passed || opts.only) {
       results['f2'] = await runScorer('f2', () => runF2(ctx));
       // Score F5 here — all page events during F1+F2 have been collected.
       results['f5'] = await runScorer('f5', async () => {
@@ -126,6 +134,11 @@ export async function scoreSubmission(
       // the real UI. Best-effort: if login fails, judges fall back to the
       // logged-out shots (missing dashboard.png is skipped, not an error).
       if (submission.backend) {
+        // The login FORM (with its password field) usually lives behind a "Sign
+        // In" splash, so it never appears in the logged-out shots above. Capture
+        // it explicitly so F4 can actually see the password field instead of
+        // wrongly reporting it missing.
+        await captureLoginFormScreenshot(ctx.browser, ctx.submission.artifactUrl, paths.screenshots);
         await captureAuthenticatedScreenshots(ctx.browser, ctx.submission.artifactUrl, submission.backend.userA, paths.screenshots);
       }
 
@@ -260,14 +273,95 @@ async function captureMobileScreenshot(
 // Log in as user A on a fresh context and capture the authenticated dashboard,
 // so F4/V1 judge the real app rather than the login screen. Best-effort — any
 // failure leaves the logged-out screenshots in place.
+// Reveal and screenshot the login FORM (email + password), which typically sits
+// behind a "Sign In" splash button and so is absent from the logged-out
+// front-page shots. Gives F4 direct evidence of the password field. Best-effort.
+async function captureLoginFormScreenshot(
+  browser: import('@playwright/test').Browser,
+  url: string,
+  screenshotsDir: string,
+): Promise<void> {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  try {
+    const page = await ctx.newPage();
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
+    await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
+    const revealed = await revealLoginForm(page, url);
+    if (!revealed) return; // no password form found — skip (judge falls back)
+    await page.waitForTimeout(800);
+    await page.screenshot({ path: join(screenshotsDir, 'login-form.png'), fullPage: true }).catch(() => undefined);
+  } catch {
+    // best-effort
+  } finally {
+    await ctx.close().catch(() => undefined);
+  }
+}
+
+// DEBUG: snapshot the page state right before the desktop dashboard screenshot,
+// so we can diagnose why it sometimes captures the splash. Writes
+// dashboard-debug.json next to the screenshots. Best-effort; never throws.
+async function dumpCaptureDebug(
+  page: import('@playwright/test').Page,
+  screenshotsDir: string,
+  marker: string,
+): Promise<void> {
+  try {
+    const currentUrl = page.url();
+    const bodyText = (await page.locator('body').innerText().catch(() => '')).slice(0, 600);
+    const hasSignIn = await page
+      .getByRole('button', { name: /sign ?in|log ?in/i })
+      .or(page.getByRole('link', { name: /sign ?in|log ?in/i }))
+      .count()
+      .catch(() => -1);
+    const hasLogout = await page
+      .getByRole('button', { name: /log ?out|sign ?out/i })
+      .or(page.getByRole('link', { name: /log ?out|sign ?out/i }))
+      .count()
+      .catch(() => -1);
+    const hasPassword = await page.locator('input[type="password"]').count().catch(() => -1);
+    const markerVisible = await page.getByText(marker, { exact: false }).count().catch(() => -1);
+    const is404 = /404|page not found|forgot to add the page/i.test(bodyText);
+    await writeJson(join(screenshotsDir, 'dashboard-debug.json'), {
+      currentUrl,
+      hasSignIn,
+      hasLogout,
+      hasPassword,
+      markerVisible,
+      is404,
+      bodyTextPreview: bodyText,
+    });
+  } catch {
+    // best-effort
+  }
+}
+
 async function captureAuthenticatedScreenshots(
   browser: import('@playwright/test').Browser,
   url: string,
   account: Account,
   screenshotsDir: string,
 ): Promise<void> {
+  // WARM-UP: do the (possibly OTP-gated) login once in a throwaway context to
+  // populate the per-account session cache. The fresh-OTP context can't reliably
+  // reach the dashboard in-place — Clerk doesn't re-recognise the just-set
+  // session on `/` within the same page, so it stays on the splash (confirmed via
+  // dashboard-debug.json). But a NEW context seeded with the cached session loads
+  // fresh and Clerk hydrates as signed-in → redirect to the dashboard works.
+  // So both the desktop and mobile captures below run via the cached path.
+  const warmup = await browser.newContext();
+  try {
+    await applyCachedSession(warmup, account);
+    const wp = await warmup.newPage();
+    await login(wp, url, account).catch(() => undefined); // populates sessionCache on success
+  } catch {
+    // best-effort
+  } finally {
+    await warmup.close().catch(() => undefined);
+  }
+
   const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   try {
+    await applyCachedSession(ctx, account);
     const page = await ctx.newPage();
     const outcome = await login(page, url, account);
     if (!outcome.ok) return;
@@ -280,8 +374,21 @@ async function captureAuthenticatedScreenshots(
     // before a create poisons the create on hydration-sensitive SPAs). The empty
     // state ("No contacts yet") is verified deterministically by F6 from source,
     // so we deliberately don't try to screenshot it here.
-    await createContact(page, 'Sample Contact').catch(() => undefined);
-    await page.waitForTimeout(1000);
+    const marker = 'Sample Contact';
+    await createContact(page, marker).catch(() => undefined);
+    // Wait for the created row to actually render before screenshotting — without
+    // this we can capture the still-empty list (the create is async) and the
+    // judge wrongly reports "Contact list display / Delete control missing".
+    const createdRow = page.getByText(marker, { exact: false }).first();
+    await createdRow.waitFor({ state: 'visible', timeout: 8_000 }).catch(() => undefined);
+    // Hover the created row so any hover-revealed per-row controls (a common
+    // pattern: the delete ✕ is `opacity-0` until `group-hover`) become visible in
+    // the screenshot — otherwise the judge wrongly reports the ✕ as missing.
+    await createdRow.hover().catch(() => undefined);
+    await page.waitForTimeout(500);
+    // DEBUG: dump where the desktop capture actually landed, so we can see why the
+    // dashboard screenshot sometimes shows the splash instead of the dashboard.
+    await dumpCaptureDebug(page, screenshotsDir, marker);
     await page.screenshot({ path: join(screenshotsDir, 'dashboard.png'), fullPage: true }).catch(() => undefined);
     // No teardown here — a single account cleanup runs at the very end of the
     // submission, so nothing deletes another scorer's in-flight test data.
@@ -293,6 +400,7 @@ async function captureAuthenticatedScreenshots(
   // Mobile dashboard in its own context.
   const mctx = await browser.newContext({ viewport: { width: 360, height: 800 } });
   try {
+    await applyCachedSession(mctx, account);
     const page = await mctx.newPage();
     const outcome = await login(page, url, account);
     if (!outcome.ok) return;
@@ -317,6 +425,7 @@ async function cleanupTestAccounts(
   for (const account of accounts) {
     const ctx = await browser.newContext();
     try {
+      await applyCachedSession(ctx, account);
       const page = await ctx.newPage();
       const outcome = await login(page, url, account);
       if (outcome.ok) {

@@ -62,9 +62,14 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
         if (error) return `error: ${error.slice(0, 80)}`;
         if (mean === null) return 'N/A';
         const pct = ((mean - 1) / 4 * 100).toFixed(0);
-        const model = String(d['model'] ?? '?').split('/').pop() ?? '';
-        const suffix = notes ? ` — ${notes.slice(0, 50)}` : '';
-        return `${mean.toFixed(1)}/5 (${pct}%) via ${model}${suffix}`;
+        const models = d['models'] as string[] | undefined;
+        const modelLabel = models
+          ? models.map((m) => m.split('/').pop()).join('+')
+          : String(d['model'] ?? '?').split('/').pop();
+        const disagreements = d['disagreements'] as string[] | undefined;
+        const flagSuffix = disagreements && disagreements.length > 0 ? ` ⚑ ${disagreements.join(',')}` : '';
+        const notesSuffix = notes ? ` — ${notes.slice(0, 40)}` : '';
+        return `${mean.toFixed(1)}/5 (${pct}%) via ${modelLabel}${flagSuffix}${notesSuffix}`;
       }
 
       case 'f4': {

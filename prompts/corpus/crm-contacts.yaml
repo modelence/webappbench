@@ -44,11 +44,14 @@ prompt: |
 # B's data endpoint by signing in as B; no probe paths are declared here).
 must_have:
   # 1. Unauthenticated visitors see the login screen, not the dashboard.
+  #    revealLoginForm clicks through a marketing splash (a "Sign In" button at
+  #    `/` and the form at /login) — a no-op when the form is already on the page.
   - id: login_screen_when_logged_out
     setup:
       - kind: evaluate
         expr: "() => { localStorage.clear(); sessionStorage.clear(); }"
       - kind: reload
+      - kind: revealLoginForm
     locator: "getByRole('textbox', { name: /email/i }).or(getByLabel(/email/i))"
     assert: "toBeVisible"
 
@@ -59,6 +62,7 @@ must_have:
       - kind: evaluate
         expr: "() => { localStorage.clear(); sessionStorage.clear(); }"
       - kind: reload
+      - kind: revealLoginForm
     locator: "locator('input[type=\"password\"]')"
     assert: "toHaveCountAtLeast(1)"
 

@@ -1,7 +1,7 @@
 import type { APIRequestContext, Browser } from '@playwright/test';
 import type { ScorerContext, ScorerResult } from '../types.ts';
 import { captureDataResponses, extractIdentifier, errMsg, type CapturedDataResponse } from '../backend/auth.ts';
-import { login, createContact } from '../backend/login.ts';
+import { login, createContact, applyCachedSession } from '../backend/login.ts';
 
 // Replay a captured data request (GET or POST/RPC) through a given browser
 // context's request API, so that context's session cookies/headers ride along.
@@ -91,17 +91,35 @@ export async function runS4(ctx: ScorerContext): Promise<ScorerResult> {
   let bIdentifier: string | null = null;
   const seedMarker = `S4_PROBE_${ctx.submission.runIdx}_${Date.now().toString(36)}`;
   try {
+    await applyCachedSession(ctxB, backend.userB);
     const pageB = await ctxB.newPage();
     const loginB = await login(pageB, url, backend.userB);
     if (!loginB.ok) {
       return naResult(`could not sign in as user B: ${loginB.reason ?? 'unknown'}`, start);
     }
-    // Seed a marked record as B, then capture the dashboard's data fetch.
+    // Seed a marked record as B, then confirm it actually rendered on the
+    // dashboard before probing — if the seed silently failed (wrong page), the
+    // data fetch would carry no records and the capture would come up empty.
     await createContact(pageB, seedMarker).catch(() => undefined);
+    await pageB
+      .getByText(seedMarker, { exact: false })
+      .first()
+      .waitFor({ state: 'visible', timeout: 8_000 })
+      .catch(() => undefined);
     const capture = captureDataResponses(pageB);
-    // Reload so the dashboard re-fetches its (now non-empty) data with capture on.
-    await pageB.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
-    await pageB.waitForTimeout(2500);
+    // RELOAD THE CURRENT (dashboard) URL — not the app root. login() leaves us on
+    // the authenticated dashboard route (e.g. /contacts); navigating back to `/`
+    // would render the logged-out splash and fetch nothing, so the data capture
+    // would see no record list. reload() re-fetches the dashboard's own data.
+    await pageB.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
+    // Wait for the seeded record to re-render — proves the data fetch completed
+    // within the capture window (Clerk re-hydration on reload can delay it).
+    await pageB
+      .getByText(seedMarker, { exact: false })
+      .first()
+      .waitFor({ state: 'visible', timeout: 12_000 })
+      .catch(() => undefined);
+    await pageB.waitForTimeout(1500);
     await pageB.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
     bData = await capture.stop();
     if (!bData) {
@@ -155,6 +173,7 @@ export async function runS4(ctx: ScorerContext): Promise<ScorerResult> {
   // dashboard data response, and check whether B's marker appears in it.
   const ctxA = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   try {
+    await applyCachedSession(ctxA, backend.userA);
     const pageA = await ctxA.newPage();
     const captureA = captureDataResponses(pageA);
     const loginA = await login(pageA, url, backend.userA);
