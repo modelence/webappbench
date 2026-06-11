@@ -17,6 +17,11 @@ export async function runF1(ctx: ScorerContext): Promise<ScorerResult> {
       timeout: GOTO_TIMEOUT_MS,
     });
     const status = response?.status() ?? 0;
+    // Vercel Deployment Protection serves its own SSO login page with a 401.
+    // Scoring would silently measure Vercel's wall instead of the submitted
+    // app — flag it so the submitter swaps in the public production URL.
+    const setCookie = (await response?.headerValue('set-cookie').catch(() => null)) ?? '';
+    const vercelSsoWall = status === 401 && setCookie.includes('_vercel_sso_nonce');
     await ctx.page.waitForLoadState('networkidle', { timeout: NETWORKIDLE_TIMEOUT_MS }).catch(() => undefined);
 
     const bodyText = (await ctx.page.textContent('body').catch(() => null)) ?? '';
@@ -37,6 +42,10 @@ export async function runF1(ctx: ScorerContext): Promise<ScorerResult> {
         httpStatus: status,
         bodyTextLength: textLength,
         elapsedMs: Date.now() - start,
+        ...(vercelSsoWall && {
+          error:
+            'Vercel Deployment Protection wall (SSO login page) — submitted URL is not public; use the production alias URL instead',
+        }),
       },
     };
   } catch (err) {
