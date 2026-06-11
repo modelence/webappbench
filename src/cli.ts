@@ -1,11 +1,11 @@
 #!/usr/bin/env node
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { readdir, stat } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Command, InvalidArgumentError } from 'commander';
 import { loadDotenv } from './core/env.ts';
 
 await loadDotenv();
+import { readPackageVersion } from './core/version.ts';
 import { createSubmissionArtifact } from './core/submission.ts';
 import { TOOL_NAME_PATTERN } from './core/types.ts';
 import type { ToolName, UserReportedCost, UserReportedTiming } from './core/types.ts';
@@ -17,23 +17,6 @@ import { runOne } from './scorers/score-all.ts';
 import { loadConfig } from './core/config.ts';
 import { generateReport } from './report/generate.ts';
 import { generateFixReport, generateFixReportRollup } from './report/fix-report.ts';
-
-async function readPackageVersion(): Promise<string> {
-  const here = dirname(fileURLToPath(import.meta.url));
-  const candidates = [join(here, '..', 'package.json'), join(here, '..', '..', 'package.json')];
-  for (const candidate of candidates) {
-    try {
-      const raw = await readFile(candidate, 'utf8');
-      const parsed = JSON.parse(raw) as { name?: string; version?: string };
-      if (parsed.name === 'webappbench' && typeof parsed.version === 'string') {
-        return parsed.version;
-      }
-    } catch {
-      // try next
-    }
-  }
-  return '0.0.0';
-}
 
 const program = new Command();
 
@@ -258,20 +241,35 @@ async function scoreFromConfig(tool: ToolName | undefined, opts: ScoreOptions): 
   console.log(`Finished: ${okCount} scored, ${failCount} failed.`);
 
   if (opts.leaderboard) {
-    const runs = await generateReport(opts.artifacts, opts.out);
-    console.log(`Wrote ${opts.out} with ${runs.length} scored run(s)`);
+    const includeOnly = config.runs.map((r) => ({ tool: r.tool, promptId: r.prompt, runIdx: r.runIdx }));
+    const runs = await generateReport(opts.artifacts, opts.out, includeOnly);
+    console.log(`Wrote ${opts.out} with ${runs.length} scored run(s) (entries in ${opts.config} only)`);
   }
   if (failCount > 0) process.exitCode = 1;
 }
 
 program
   .command('leaderboard')
-  .description('Generate leaderboard.html from scored submissions')
+  .description('Generate leaderboard.html from scored submissions. By default only runs listed in submissions.yaml are included; pass --all to include every artifact.')
   .option('-a, --artifacts <dir>', 'Artifacts root', 'artifacts')
   .option('-o, --out <file>', 'Output file', 'leaderboard.html')
-  .action(async (opts: { artifacts: string; out: string }) => {
-    const runs = await generateReport(opts.artifacts, opts.out);
-    console.log(`Wrote ${opts.out} with ${runs.length} scored run(s)`);
+  .option('-c, --config <path>', 'Submissions config used to filter runs', 'submissions.yaml')
+  .option('--all', 'Include every scored artifact, ignoring the submissions config')
+  .action(async (opts: { artifacts: string; out: string; config: string; all?: boolean }) => {
+    let includeOnly: { tool: string; promptId: string; runIdx: number }[] | undefined;
+    if (!opts.all) {
+      try {
+        const config = await loadConfig(opts.config);
+        includeOnly = config.runs.map((r) => ({ tool: r.tool, promptId: r.prompt, runIdx: r.runIdx }));
+      } catch (err) {
+        console.warn(
+          `Could not read ${opts.config} (${err instanceof Error ? err.message : String(err)}); including all artifacts.`,
+        );
+      }
+    }
+    const runs = await generateReport(opts.artifacts, opts.out, includeOnly);
+    const scope = includeOnly ? ` (entries in ${opts.config} only)` : '';
+    console.log(`Wrote ${opts.out} with ${runs.length} scored run(s)${scope}`);
   });
 
 program

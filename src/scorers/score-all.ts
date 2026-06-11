@@ -92,6 +92,7 @@ function timingFromEntry(e: SubmissionConfigEntry): UserReportedTiming | undefin
   if (e.promptSubmittedAt) t.promptSubmittedAt = e.promptSubmittedAt;
   if (e.firstRenderAt) t.firstRenderAt = e.firstRenderAt;
   if (e.workingBuildAt) t.workingBuildAt = e.workingBuildAt;
+  if (e.buildSeconds !== undefined) t.buildSeconds = e.buildSeconds;
   return Object.keys(t).length > 0 ? t : undefined;
 }
 

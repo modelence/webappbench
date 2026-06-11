@@ -1,6 +1,7 @@
 import { readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { Submission } from '../core/submission.ts';
+import { readPackageVersion } from '../core/version.ts';
 import { computeComposite, scorerWeight, dimensionWeight, ALL_DIMENSION_WEIGHTS, type Dimension } from '../scorers/composite.ts';
 import type { ScorerResult } from '../scorers/types.ts';
 
@@ -15,12 +16,60 @@ interface RunSummary {
   hasSource: boolean;
 }
 
-export async function generateReport(artifactsRoot: string, outFile: string): Promise<RunSummary[]> {
-  const runs = await collectRuns(artifactsRoot);
-  const html = renderHtml(runs);
+/** Identifies one run for leaderboard filtering; matches submissions.yaml entries. */
+export interface RunKey {
+  tool: string;
+  promptId: string;
+  runIdx: number;
+}
+
+export async function generateReport(
+  artifactsRoot: string,
+  outFile: string,
+  includeOnly?: RunKey[],
+): Promise<RunSummary[]> {
+  const collected = await collectRuns(artifactsRoot);
+  const runs = includeOnly ? filterRuns(collected, includeOnly) : collected;
+  const html = renderHtml(runs, await readPackageVersion());
   await writeFile(outFile, html, 'utf8');
   await writeFile(jsonOutPath(outFile), serializeRuns(runs), 'utf8');
   return runs;
+}
+
+/**
+ * Generation duration for a run: the cost scorer's time-to-working-build
+ * (user-reported buildSeconds or workingBuildAt − promptSubmittedAt).
+ */
+function genDurationMs(scores: Record<string, ScorerResult>): number | null {
+  const ttwbMs = scores['cost']?.details?.['ttwbMs'];
+  if (typeof ttwbMs !== 'number' || !Number.isFinite(ttwbMs) || ttwbMs < 0) return null;
+  return ttwbMs;
+}
+
+function formatDuration(ms: number | null): string {
+  if (ms === null) return '—';
+  const totalSeconds = Math.round(ms / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  if (minutes === 0) return `${seconds}s`;
+  return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+}
+
+function meanGenDurationMs(runs: RunSummary[]): number | null {
+  const values = runs
+    .map((r) => genDurationMs(r.scores))
+    .filter((v): v is number => v !== null);
+  if (values.length === 0) return null;
+  return values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
+function runKey(tool: string, promptId: string, runIdx: number): string {
+  return `${tool}/${promptId}/${runIdx}`;
+}
+
+function filterRuns(runs: RunSummary[], includeOnly: RunKey[]): RunSummary[] {
+  const allowed = new Set(includeOnly.map((k) => runKey(k.tool, k.promptId, k.runIdx)));
+  return runs.filter((r) => allowed.has(runKey(r.tool, r.promptId, r.runIdx)));
 }
 
 function jsonOutPath(htmlOutFile: string): string {
@@ -253,7 +302,7 @@ const GROUP_COLORS: Record<string, string> = {
   Cost:         '#6b7280',
 };
 
-function renderHtml(runs: RunSummary[]): string {
+function renderHtml(runs: RunSummary[], version: string): string {
   const anySource = runs.some((r) => r.hasSource);
   const visibleDims: Dim[] = ALL_DIMS.filter(
     (d) => anySource || !SOURCE_ONLY_DIMS.has(d),
@@ -271,6 +320,7 @@ function renderHtml(runs: RunSummary[]): string {
   };
 
   const dimHeaders = visibleDims.map(thWithTooltip).join('');
+  const durationHeader = `<th data-tip="Generation duration: how long the tool took to produce a working build (user-reported buildSeconds). Informational only — not included in composite score.">Duration</th>`;
 
   // Four dimension columns shown between the composite and the per-scorer
   // columns. Order matches DIMENSION_ORDER (Functional → Code → Visual →
@@ -320,6 +370,7 @@ function renderHtml(runs: RunSummary[]): string {
       <td class="link-cell"><a href="${escape(r.artifactUrl)}" target="_blank" rel="noopener" title="Open live site">↗</a></td>
       <td class="ver-cell">${escape(r.toolVersion)}</td>
       ${dimCells}
+      <td class="ver-cell">${escape(formatDuration(genDurationMs(r.scores)))}</td>
     </tr>`;
   }).join('\n');
 
@@ -344,12 +395,14 @@ function renderHtml(runs: RunSummary[]): string {
         ${dimensionCells}
         <td class="runs-cell">${agg.runs} run${agg.runs === 1 ? '' : 's'}</td>
         ${dimCells}
+        <td class="ver-cell">${escape(formatDuration(meanGenDurationMs(runs.filter((r) => r.tool === tool))))}</td>
       </tr>`;
     }).join('\n');
 
   // Column counts include the 4 new dimension cells (between composite and per-scorer).
-  const leaderColCount = 4 + DIMENSION_COLUMN_ORDER.length + visibleDims.length;
-  const perRunColCount  = 5 + DIMENSION_COLUMN_ORDER.length + visibleDims.length;
+  // +1 in each: the trailing Duration column after the per-scorer columns.
+  const leaderColCount = 5 + DIMENSION_COLUMN_ORDER.length + visibleDims.length;
+  const perRunColCount  = 6 + DIMENSION_COLUMN_ORDER.length + visibleDims.length;
   const generatedAt = new Date().toISOString();
 
   return `<!DOCTYPE html>
@@ -680,7 +733,7 @@ function renderHtml(runs: RunSummary[]): string {
         Reproducible, open-source scoring for AI-generated websites
       </div>
       <div class="header-meta">
-        <span><span class="badge">v0.1</span></span>
+        <span><span class="badge">v${escape(version)}</span></span>
         <span>Generated ${escape(generatedAt)}</span>
         <span>${escape(String(runs.length))} scored run${runs.length === 1 ? '' : 's'}</span>
         <span>Score = weighted mean of dimension scores · higher is better · /100</span>
@@ -706,6 +759,7 @@ function renderHtml(runs: RunSummary[]): string {
         ${dimensionColumnHeaders}
         <th>Runs</th>
         ${dimHeaders}
+        ${durationHeader}
       </tr></thead>
       <tbody>${summaryRows || `<tr><td colspan="${leaderColCount}" class="empty">No scored runs yet.</td></tr>`}</tbody>
     </table>
@@ -722,6 +776,7 @@ function renderHtml(runs: RunSummary[]): string {
         ${dimensionColumnHeaders}
         <th>Prompt</th><th>URL</th><th>Version</th>
         ${dimHeaders}
+        ${durationHeader}
       </tr></thead>
       <tbody>${perRunRows || `<tr><td colspan="${perRunColCount}" class="empty">No scored runs yet.</td></tr>`}</tbody>
     </table>
