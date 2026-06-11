@@ -5,8 +5,13 @@ export const BUILDERS: readonly BuilderDef[] = [
     id: 'base44',
     label: 'Base44',
     hosts: ['base44.com'],
+    contentScripts: [
+      { file: 'src/content/base44.js', world: 'ISOLATED' },
+      { file: 'src/content/base44-main.js', world: 'MAIN' },
+    ],
     creditToUsd: 0.2,
-    creditRateNote: 'Starter plan: $20/mo for 100 message credits (Builder $50/250 matches).',
+    creditRateNote:
+      'Monthly billing: $0.20/message credit (flat across Starter $20/100, Builder $50/250, Pro $100/500). 1 prompt = 1 credit.',
   },
 ];
 

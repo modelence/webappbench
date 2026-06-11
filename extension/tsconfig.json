@@ -3,6 +3,10 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    // Content scripts have no imports/exports and must stay classic scripts —
+    // "legacy" keeps tsc from forcing them into modules (which appends a
+    // top-level `export {}` that breaks MV3 content-script loading).
+    "moduleDetection": "legacy",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["chrome", "node"],
     "rootDir": ".",

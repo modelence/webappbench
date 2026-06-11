@@ -1,8 +1,16 @@
+export interface ContentScriptDef {
+  file: string;
+  world: 'ISOLATED' | 'MAIN';
+}
+
 export interface BuilderDef {
   id: string;
   label: string;
   // Hostnames (suffix match) where this builder's content script is active.
   hosts: readonly string[];
+  // Same files as the manifest content_scripts; used to re-inject when a tab
+  // was opened before the extension was (re)loaded.
+  contentScripts: readonly ContentScriptDef[];
   // Retail USD price of one platform credit; overridable in popup settings.
   creditToUsd: number;
   creditRateNote: string;

@@ -16,8 +16,17 @@ body {
 }
 
 header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
+}
+
+.logo {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
 }
 
 h1 {

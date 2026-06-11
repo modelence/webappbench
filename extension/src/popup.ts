@@ -65,12 +65,33 @@ async function activeTab(): Promise<chrome.tabs.Tab> {
   return tab;
 }
 
-async function sendToTab(tabId: number, request: ContentRequest): Promise<ContentResponse> {
+async function injectContentScripts(tabId: number, builder: BuilderDef): Promise<void> {
+  for (const script of builder.contentScripts) {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: [script.file],
+      world: script.world,
+    });
+  }
+}
+
+async function sendToTab(
+  tabId: number,
+  builder: BuilderDef,
+  request: ContentRequest,
+): Promise<ContentResponse> {
   try {
     return (await chrome.tabs.sendMessage(tabId, request)) as ContentResponse;
-  } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`Cannot reach the page (reload the tab and retry): ${message}`);
+  } catch {
+    // No listener in the tab — typically a tab opened before the extension
+    // was (re)loaded. Inject the content scripts and retry once.
+    try {
+      await injectContentScripts(tabId, builder);
+      return (await chrome.tabs.sendMessage(tabId, request)) as ContentResponse;
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Cannot reach the page (reload the tab and retry): ${message}`);
+    }
   }
 }
 
@@ -95,7 +116,7 @@ async function handleApply(): Promise<void> {
       setStatus(`Active tab is not a ${builder.label} page — open ${builder.label} first.`, 'error');
       return;
     }
-    const response = await sendToTab(tab.id!, { type: 'FILL_PROMPT', text: prompt.prompt });
+    const response = await sendToTab(tab.id!, builder, { type: 'FILL_PROMPT', text: prompt.prompt });
     if (!response.ok) {
       setStatus(response.error, 'error');
       return;
@@ -123,7 +144,7 @@ async function handleCollect(): Promise<void> {
       return;
     }
     setStatus('Collecting…');
-    const response = await sendToTab(tab.id!, { type: 'COLLECT' });
+    const response = await sendToTab(tab.id!, builder, { type: 'COLLECT' });
     if (!response.ok) {
       setStatus(response.error, 'error');
       return;

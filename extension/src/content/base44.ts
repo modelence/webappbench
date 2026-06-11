@@ -87,6 +87,55 @@ function requestCapturedAuthHeaders(timeoutMs = 500): Promise<Record<string, str
   });
 }
 
+function looksLikeJwt(value: string): boolean {
+  return /^ey[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(value);
+}
+
+// Content scripts share the page's origin, so localStorage is readable here.
+// Base44 stores its bearer token in localStorage; scan for a JWT-shaped value
+// under an auth-ish key as a fallback when no live request was intercepted.
+function authFromLocalStorage(): Record<string, string> {
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key || !/token|auth|jwt|session|access/i.test(key)) continue;
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      if (looksLikeJwt(raw)) return { Authorization: `Bearer ${raw}` };
+      // Some apps store a JSON blob; pull the first JWT-shaped string out of it.
+      try {
+        const parsed: unknown = JSON.parse(raw);
+        const token = findJwt(parsed);
+        if (token) return { Authorization: `Bearer ${token}` };
+      } catch {
+        // not JSON — ignore
+      }
+    }
+  } catch {
+    // localStorage may be unavailable; ignore
+  }
+  return {};
+}
+
+function findJwt(value: unknown, depth = 0): string | null {
+  if (depth > 4 || value === null) return null;
+  if (typeof value === 'string') return looksLikeJwt(value) ? value : null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findJwt(item, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value === 'object') {
+    for (const item of Object.values(value)) {
+      const found = findJwt(item, depth + 1);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
 async function collectConversation(): Promise<
   { ok: true; appId: string; conversation: unknown } | { ok: false; error: string }
 > {
@@ -99,13 +148,20 @@ async function collectConversation(): Promise<
   }
   const url = `${window.location.origin}/api/apps/${appId}/chat/full-conversation?limit=100`;
   const capturedHeaders = await requestCapturedAuthHeaders();
+  // Prefer captured request headers; fall back to a localStorage token scan.
+  const authHeaders =
+    Object.keys(capturedHeaders).length > 0 ? capturedHeaders : authFromLocalStorage();
   try {
     const response = await fetch(url, {
       credentials: 'include',
-      headers: capturedHeaders,
+      headers: authHeaders,
     });
     if (!response.ok) {
-      return { ok: false, error: `Conversation request failed: HTTP ${response.status}` };
+      const hint =
+        response.status === 401 || response.status === 403
+          ? ' — no auth token found; click somewhere in the chat to trigger an API call, then retry'
+          : '';
+      return { ok: false, error: `Conversation request failed: HTTP ${response.status}${hint}` };
     }
     const conversation: unknown = await response.json();
     return { ok: true, appId, conversation };

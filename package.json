@@ -40,6 +40,7 @@
     "typecheck": "tsc",
     "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
     "build:extension": "npm run build --prefix extension",
+    "watch:extension": "npm run watch --prefix extension",
     "test:extension": "npm test --prefix extension",
     "bench": "tsx src/cli.ts",
     "prepublishOnly": "npm run build"

@@ -42,7 +42,9 @@ test('converts credits to USD at the base44 registry rate', async () => {
   const metrics = parseBase44Conversation(await loadFixture());
   const builder = getBuilder('base44');
   assert.ok(builder);
+  assert.equal(builder.creditToUsd, 0.2); // $0.20/credit, base44 monthly billing baseline
   assert.ok(metrics.credits !== null);
+  // 1.2 credits × $0.20 = $0.24
   assert.equal(Math.round(metrics.credits * builder.creditToUsd * 100) / 100, 0.24);
 });
 
