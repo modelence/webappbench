@@ -65,6 +65,24 @@ async function cacheSession(page: Page, account: Account): Promise<void> {
   sessionCache.set(account.email, state);
 }
 
+// Whether we hold a cached authenticated session for this account (populated by
+// a prior successful login this run).
+function hasCachedSession(account: Account): boolean {
+  return sessionCache.has(account.email);
+}
+
+// True when the page currently shows the authenticated dashboard — detected
+// POSITIVELY by its own controls (logout, create-contact affordance, list/empty
+// markers), never by mere absence of a splash (a 404 also lacks the splash).
+async function isOnDashboard(page: Page): Promise<boolean> {
+  const markers = page
+    .getByRole('button', { name: /log ?out|sign ?out/i })
+    .or(page.getByRole('link', { name: /log ?out|sign ?out/i }))
+    .or(page.getByRole('button', { name: /add contact|new contact|add|create|save/i }))
+    .or(page.getByText(/new contact|add contact|no contacts yet|your contacts|directory/i));
+  return markers.count().then((c) => c > 0).catch(() => false);
+}
+
 // After auth succeeds, make sure the page is actually on the authenticated
 // dashboard — not a transitional Clerk page or the marketing splash that `/`
 // serves to logged-out visitors. We navigate to the app root (the session
@@ -72,27 +90,62 @@ async function cacheSession(page: Page, account: Account): Promise<void> {
 // splash, give the SPA a moment to route/redirect. Best-effort: never throws,
 // so a quirky app can't break the login result.
 async function settleOnDashboard(page: Page, url: string): Promise<void> {
-  try {
-    // After OTP, navigate to the app root. Auth-gated SPAs (this one uses Clerk's
-    // <Show when="signed-in"> + a redirect) render the marketing splash for a beat
-    // while Clerk hydrates the session, THEN redirect `/` → the dashboard. So we
-    // must reload root with a fresh (now-authenticated) session and then WAIT for
-    // the splash to give way, rather than screenshotting the transitional splash.
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => undefined);
-    await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
-    // Poll for the splash to disappear (Clerk hydration + redirect can take a few
-    // seconds). The splash is identified by its "Sign In"/"Create Account"
-    // affordance; once it's gone we're on the authenticated dashboard.
-    const splash = page
-      .getByRole('button', { name: /sign ?in|log ?in|create account|sign ?up/i })
-      .or(page.getByRole('link', { name: /sign ?in|log ?in|create account|sign ?up/i }));
-    for (let i = 0; i < 10; i++) {
-      const onSplash = await splash.count().then((c) => c > 0).catch(() => false);
-      const hasPassword = await page.locator('input[type="password"]').count().then((c) => c > 0).catch(() => false);
-      if (!onSplash && !hasPassword) return; // dashboard reached
+  // POSITIVE detection: the authenticated dashboard reliably shows a logout
+  // control and/or the contact-management UI (a create form / "Add contact"
+  // button). We detect the dashboard by its PRESENCE — not by the mere absence
+  // of a splash, because a 404 page also lacks the splash and would otherwise be
+  // mistaken for "logged in".
+  const on404 = async (): Promise<boolean> => {
+    const body = await page.locator('body').innerText().catch(() => '');
+    return /404|page not found|not found|forgot to add the page/i.test(body);
+  };
+  // Wait for either the dashboard to appear (success) or a definitive 404. Up to
+  // ~`rounds` seconds. Returns true if the dashboard was reached.
+  const waitForDashboard = async (rounds: number): Promise<boolean> => {
+    for (let i = 0; i < rounds; i++) {
+      if (await isOnDashboard(page)) return true;
+      if (await on404()) return false;
       await page.waitForTimeout(1000);
       await page.waitForLoadState('networkidle', { timeout: 4_000 }).catch(() => undefined);
     }
+    return isOnDashboard(page);
+  };
+  try {
+    // 1) Wait IN PLACE for the app's OWN post-login redirect (this app uses
+    //    Clerk's <Show when="signed-in"><Redirect to="/contacts">). Don't touch
+    //    the URL yet — re-navigating too eagerly re-renders the splash and races
+    //    the redirect.
+    if (await waitForDashboard(10)) return;
+    // 2) Not there yet. After a FRESH OTP login, Clerk has set the session cookie
+    //    but the SPA still shows the logged-out splash because its client hasn't
+    //    re-hydrated the session on this already-loaded page. A HARD RELOAD forces
+    //    Clerk to re-read the cookie and mount as signed-in (this is exactly why
+    //    the cached-session contexts, which load fresh, reach the dashboard while
+    //    the OTP context doesn't). Try a few reloads, giving hydration time.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => undefined);
+      await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
+      if (await waitForDashboard(6)) return;
+    }
+    // 3) Still stuck — navigate to the app root explicitly, then common dashboard
+    //    routes. ONLY accept one that actually renders the dashboard; a 404 is
+    //    rejected (we never screenshot a guessed route that doesn't exist).
+    const origin = (() => {
+      try {
+        return new URL(url).origin;
+      } catch {
+        return url.replace(/\/+$/, '');
+      }
+    })();
+    for (const path of ['/contacts', '/dashboard', '/app', '/home']) {
+      await page.goto(`${origin}${path}`, { waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => undefined);
+      await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
+      if (await waitForDashboard(3)) return;
+    }
+    // 4) Nothing rendered the dashboard. Return to root so we DON'T leave the
+    //    page sitting on a 404 page that a caller would then screenshot.
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => undefined);
+    await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
   } catch {
     // best-effort — login already succeeded; downstream steps will surface any
     // dashboard-not-found condition with their own diagnostics.
@@ -111,6 +164,8 @@ async function isAlreadyLoggedIn(page: Page): Promise<boolean> {
   if (hasPassword) return false;
   const bodyText = await page.locator('body').innerText().catch(() => '');
   if (VERIFICATION_CHALLENGE_RE.test(bodyText)) return false;
+  // A 404 / error page is not a logged-in dashboard.
+  if (/404|page not found|forgot to add the page/i.test(bodyText)) return false;
   // A bare splash with a "Sign In" button is NOT logged in.
   const hasSignIn = await page
     .getByRole('button', { name: /sign ?in|log ?in/i })
@@ -368,9 +423,22 @@ export async function login(page: Page, url: string, account: Account): Promise<
   try {
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 });
     await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
-    // If the caller injected a cached authenticated session (applyCachedSession)
-    // we may already be logged in — no form, no OTP. Detect that and short-circuit.
+    // If the caller injected a cached authenticated session (applyCachedSession),
+    // Clerk needs a moment to re-read the session cookie and mount as signed-in —
+    // the page can briefly show the logged-out splash before its <Show when=
+    // "signed-in"> redirect fires. settleOnDashboard waits (and reloads) for the
+    // real dashboard. So when a cached session is present, let it settle FIRST and
+    // accept it if it reaches the dashboard, instead of prematurely treating the
+    // transitional splash as "not logged in" and re-driving the login form.
+    if (hasCachedSession(account)) {
+      await settleOnDashboard(page, url);
+      if (await isOnDashboard(page)) {
+        return { ok: true };
+      }
+      // Cached session didn't take — fall through and log in for real.
+    }
     if (await isAlreadyLoggedIn(page)) {
+      await settleOnDashboard(page, url);
       return { ok: true };
     }
     // Client-side apps (React/Modelence/etc.) mount the login form after the

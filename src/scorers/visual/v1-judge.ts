@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { getLlmClient } from '../../core/llm.ts';
+import { getLlmClient, createJudgeCompletion } from '../../core/llm.ts';
 import { writeJson } from '../../core/artifact.ts';
 import type { ChecklistConfig, ChecklistItem } from '../../core/types.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
@@ -132,17 +132,19 @@ Respond with JSON only.`;
   const judgeResults = await Promise.all(
     models.map(async (model) => {
       try {
-        const response = await client.chat.completions.create({
+        // No cross-model fallback here: V1 already runs a diverse model PAIR and
+        // averages the survivors, so a per-model fallback would just duplicate the
+        // other judge. Empty-200 retries (within the same model) still apply.
+        const { raw, usage } = await createJudgeCompletion(client, {
           model,
-          max_tokens: 4096,
+          fallbackModel: null,
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: [{ type: 'text', text: userText }, ...imageContent] },
           ],
         });
-        const raw = response.choices[0]?.message?.content ?? '';
         const parsed = parseJudgeOutput(raw);
-        return { model, raw, parsed, usage: response.usage ?? null, error: null };
+        return { model, raw, parsed, usage, error: null };
       } catch (err) {
         return { model, raw: '', parsed: null, usage: null, error: err instanceof Error ? err.message : String(err) };
       }

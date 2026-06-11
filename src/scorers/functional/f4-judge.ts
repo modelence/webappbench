@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { existsSync } from 'node:fs';
-import { getLlmClient, DEFAULT_JUDGE_MODEL } from '../../core/llm.ts';
+import { getLlmClient, DEFAULT_JUDGE_MODEL, createJudgeCompletion } from '../../core/llm.ts';
 import { writeJson } from '../../core/artifact.ts';
 import type { ChecklistConfig, ChecklistItem } from '../../core/types.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
@@ -41,6 +41,7 @@ interface ScreenshotEntry {
 // proven sticky/fixed (and any element absent from the top has scrolled away).
 const SCREENSHOTS: ScreenshotEntry[] = [
   { name: 'initial', caption: 'Full-page screenshot at the top of the document (scroll = 0).' },
+  { name: 'login-form', caption: 'The login form reached from the landing page (backend apps only; absent for apps with no auth). Use THIS to confirm auth fields like the email and password inputs — they live here, not on the marketing landing page.' },
   { name: 'viewport-mobile', caption: 'Viewport-sized capture at mobile width (360x800).' },
   { name: 'scrolled-viewport', caption: 'Viewport-sized capture AFTER scrolling 800px down. Any element visible at the top of this image is sticky or fixed; any element described in the prompt as "sticky" but absent from the top here is NOT sticky.' },
   { name: 'mid-scroll', caption: 'Viewport-sized capture scrolled to roughly the middle of the page.' },
@@ -134,50 +135,29 @@ Respond with JSON only.`;
       },
     ]);
 
-    // Some providers (seen with gemini-2.5-pro via OpenRouter) occasionally
-    // return HTTP 200 with EMPTY or non-JSON content — which the SDK's own retry
-    // doesn't catch (it's not an error status). Retry a couple of times on an
-    // empty/unparseable body before giving up, so a transient blank response
-    // doesn't drop f4 to N/A when the screenshots are perfectly judgeable.
-    let raw = '';
-    let judgeOutput: JudgeOutput | null = null;
-    let lastErr: unknown = null;
-    let usage: import('openai').OpenAI.Completions.CompletionUsage | null = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      const response = await client.chat.completions.create({
-        model,
-        max_tokens: 4096,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          {
-            role: 'user',
-            content: [{ type: 'text', text: userText }, ...imageContent],
-          },
-        ],
-      });
-      usage = (response.usage ?? null) as typeof usage;
-      raw = response.choices[0]?.message?.content ?? '';
-      if (raw.trim()) {
-        try {
-          judgeOutput = parseJudgeOutput(raw);
-          break;
-        } catch (err) {
-          lastErr = err;
-        }
-      } else {
-        lastErr = new Error('Model returned empty content');
-      }
-    }
-    if (!judgeOutput) {
+    // createJudgeCompletion retries on empty 200s and falls back to a second
+    // vision model if the primary keeps coming up empty. `usedModel` is whichever
+    // actually produced the content (may differ from `model`). Parsing stays here.
+    const { raw, usage, model: usedModel } = await createJudgeCompletion(client, {
+      model,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: [{ type: 'text', text: userText }, ...imageContent] },
+      ],
+    });
+    let judgeOutput: JudgeOutput;
+    try {
+      judgeOutput = parseJudgeOutput(raw);
+    } catch (err) {
       await writeJson(join(ctx.paths.root, 'f4-judge.json'), {
-        model,
+        model: usedModel,
         raw,
-        parseError: lastErr instanceof Error ? lastErr.message : String(lastErr),
+        parseError: err instanceof Error ? err.message : String(err),
       });
-      throw lastErr instanceof Error ? lastErr : new Error('f4 judge failed');
+      throw err;
     }
 
-    await writeJson(join(ctx.paths.root, 'f4-judge.json'), { model, raw, parsed: judgeOutput });
+    await writeJson(join(ctx.paths.root, 'f4-judge.json'), { model: usedModel, raw, parsed: judgeOutput });
 
     const scored = judgeOutput.criteria
       .map((c) => ({ ...c, score: Number(c.score) }))
@@ -193,7 +173,7 @@ Respond with JSON only.`;
       passed: normalised !== null ? normalised >= 0.5 : null,
       score: normalised,
       details: {
-        model,
+        model: usedModel,
         meanRaw: meanScore !== null ? Number(meanScore.toFixed(2)) : null,
         criteria: scored,
         criteriaTotal: criteria.length,

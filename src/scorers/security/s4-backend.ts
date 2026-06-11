@@ -97,12 +97,29 @@ export async function runS4(ctx: ScorerContext): Promise<ScorerResult> {
     if (!loginB.ok) {
       return naResult(`could not sign in as user B: ${loginB.reason ?? 'unknown'}`, start);
     }
-    // Seed a marked record as B, then capture the dashboard's data fetch.
+    // Seed a marked record as B, then confirm it actually rendered on the
+    // dashboard before probing — if the seed silently failed (wrong page), the
+    // data fetch would carry no records and the capture would come up empty.
     await createContact(pageB, seedMarker).catch(() => undefined);
+    await pageB
+      .getByText(seedMarker, { exact: false })
+      .first()
+      .waitFor({ state: 'visible', timeout: 8_000 })
+      .catch(() => undefined);
     const capture = captureDataResponses(pageB);
-    // Reload so the dashboard re-fetches its (now non-empty) data with capture on.
-    await pageB.goto(url, { waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
-    await pageB.waitForTimeout(2500);
+    // RELOAD THE CURRENT (dashboard) URL — not the app root. login() leaves us on
+    // the authenticated dashboard route (e.g. /contacts); navigating back to `/`
+    // would render the logged-out splash and fetch nothing, so the data capture
+    // would see no record list. reload() re-fetches the dashboard's own data.
+    await pageB.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
+    // Wait for the seeded record to re-render — proves the data fetch completed
+    // within the capture window (Clerk re-hydration on reload can delay it).
+    await pageB
+      .getByText(seedMarker, { exact: false })
+      .first()
+      .waitFor({ state: 'visible', timeout: 12_000 })
+      .catch(() => undefined);
+    await pageB.waitForTimeout(1500);
     await pageB.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
     bData = await capture.stop();
     if (!bData) {

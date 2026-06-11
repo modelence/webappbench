@@ -1,6 +1,6 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname, join, relative } from 'node:path';
-import { getLlmClient, DEFAULT_JUDGE_MODEL } from '../../core/llm.ts';
+import { getLlmClient, DEFAULT_JUDGE_MODEL, createJudgeCompletion } from '../../core/llm.ts';
 import { writeJson } from '../../core/artifact.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
 
@@ -116,22 +116,20 @@ ${criteriaList}
 Respond with JSON only.`;
 
   try {
-    const response = await client.chat.completions.create({
+    // Retries on empty 200s and falls back to a second model if needed.
+    const { raw, usage, model: usedModel } = await createJudgeCompletion(client, {
       model,
-      max_tokens: 4096,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userText },
       ],
     });
-
-    const raw = response.choices[0]?.message?.content ?? '';
     let judgeOutput: JudgeOutput;
     try {
       judgeOutput = parseJudgeOutput(raw);
     } catch (err) {
       await writeJson(join(ctx.paths.root, 'c7-judge.json'), {
-        model,
+        model: usedModel,
         raw,
         parseError: err instanceof Error ? err.message : String(err),
       });
@@ -139,7 +137,7 @@ Respond with JSON only.`;
     }
 
     await writeJson(join(ctx.paths.root, 'c7-judge.json'), {
-      model,
+      model: usedModel,
       raw,
       parsed: judgeOutput,
       sampledFiles: files.map((f) => f.path),
@@ -159,13 +157,13 @@ Respond with JSON only.`;
       passed: normalised !== null ? normalised >= 0.5 : null,
       score: normalised,
       details: {
-        model,
+        model: usedModel,
         meanRaw: meanScore !== null ? Number(meanScore.toFixed(2)) : null,
         criteria: scored,
         overallNotes: judgeOutput.overall_notes ?? null,
         sampledFileCount: files.length,
         sampledFiles: files.map((f) => f.path),
-        usage: response.usage ?? null,
+        usage: usage ?? null,
         elapsedMs: Date.now() - start,
       },
     };
