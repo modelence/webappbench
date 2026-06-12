@@ -1,8 +1,11 @@
 // Content script for base44 (ISOLATED world). Must stay import-free: MV3
-// content scripts are loaded as classic scripts, not ES modules. All metric
-// computation happens in the popup; this script only fills the chat input and
-// returns the raw conversation JSON.
+// content scripts are loaded as classic scripts, not ES modules. Wrapped in an
+// IIFE so its top-level names don't collide with other isolated-world content
+// scripts (tsc compiles import-free files as scripts sharing one global scope).
+// All metric computation happens in the popup; this script only fills the chat
+// input and returns the raw conversation JSON.
 
+(() => {
 type FillRequest = { type: 'FILL_PROMPT'; text: string };
 type CollectRequest = { type: 'COLLECT' };
 type AnyRequest = FillRequest | CollectRequest;
@@ -184,3 +187,4 @@ chrome.runtime.onMessage.addListener(
     return false;
   },
 );
+})();

@@ -3,6 +3,11 @@ export interface ContentScriptDef {
   world: 'ISOLATED' | 'MAIN';
 }
 
+export type ConversationParser = (
+  payload: unknown,
+  options: { promptText?: string },
+) => ConversationMetrics;
+
 export interface BuilderDef {
   id: string;
   label: string;
@@ -11,8 +16,11 @@ export interface BuilderDef {
   // Same files as the manifest content_scripts; used to re-inject when a tab
   // was opened before the extension was (re)loaded.
   contentScripts: readonly ContentScriptDef[];
+  // Turns the raw COLLECT payload into normalized metrics.
+  parser: ConversationParser;
   // Retail USD price of one platform credit; overridable in popup settings.
-  creditToUsd: number;
+  // null when this builder doesn't expose a credit/cost signal yet.
+  creditToUsd: number | null;
   creditRateNote: string;
 }
 
@@ -56,7 +64,7 @@ export interface CollectedRun {
   duration: number | null;
   wallClockSeconds: number | null;
   credits: number | null;
-  creditToUsd: number;
+  creditToUsd: number | null;
   cost: number | null;
   model: string | null;
   tokens: TokenTotals | null;

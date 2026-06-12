@@ -1,4 +1,6 @@
 import type { BuilderDef } from './types.js';
+import { parseBase44Conversation } from './base44-parse.js';
+import { parseModelenceConversation } from './modelence-parse.js';
 
 export const BUILDERS: readonly BuilderDef[] = [
   {
@@ -9,9 +11,24 @@ export const BUILDERS: readonly BuilderDef[] = [
       { file: 'src/content/base44.js', world: 'ISOLATED' },
       { file: 'src/content/base44-main.js', world: 'MAIN' },
     ],
+    parser: parseBase44Conversation,
     creditToUsd: 0.2,
     creditRateNote:
       'Monthly billing: $0.20/message credit (flat across Starter $20/100, Builder $50/250, Pro $100/500). 1 prompt = 1 credit.',
+  },
+  {
+    id: 'modelence',
+    label: 'Modelence',
+    hosts: ['modelence.com'],
+    contentScripts: [
+      { file: 'src/content/modelence.js', world: 'ISOLATED' },
+      { file: 'src/content/modelence-main.js', world: 'MAIN' },
+    ],
+    parser: parseModelenceConversation,
+    // Modelence's socket frame carries no per-message cost/token signal, so we
+    // can't derive USD yet. Duration is reported; cost stays blank.
+    creditToUsd: null,
+    creditRateNote: 'No cost signal available yet — duration only.',
   },
 ];
 

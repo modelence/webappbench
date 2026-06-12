@@ -1,5 +1,4 @@
-import { BUILDERS, builderForUrl, getBuilder } from './shared/builders.js';
-import { parseBase44Conversation } from './shared/base44-parse.js';
+import { BUILDERS, builderForUrl } from './shared/builders.js';
 import type {
   BuilderDef,
   CollectedRun,
@@ -9,7 +8,7 @@ import type {
   PromptEntry,
 } from './shared/types.js';
 
-const builderSelect = document.querySelector<HTMLSelectElement>('#builder-select')!;
+const builderLabel = document.querySelector<HTMLSpanElement>('#builder-label')!;
 const promptSelect = document.querySelector<HTMLSelectElement>('#prompt-select')!;
 const promptPreview = document.querySelector<HTMLPreElement>('#prompt-preview')!;
 const applyButton = document.querySelector<HTMLButtonElement>('#apply-btn')!;
@@ -53,10 +52,11 @@ async function getRateOverrides(): Promise<Record<string, number>> {
   return (await getStored<Record<string, number>>('creditRates')) ?? {};
 }
 
-async function effectiveRate(builder: BuilderDef): Promise<number> {
+async function effectiveRate(builder: BuilderDef): Promise<number | null> {
   const overrides = await getRateOverrides();
   const override = overrides[builder.id];
-  return typeof override === 'number' && override >= 0 ? override : builder.creditToUsd;
+  if (typeof override === 'number' && override >= 0) return override;
+  return builder.creditToUsd;
 }
 
 async function activeTab(): Promise<chrome.tabs.Tab> {
@@ -101,21 +101,22 @@ function selectedPrompt(): PromptEntry {
   return prompt;
 }
 
-function selectedBuilder(): BuilderDef {
-  const builder = getBuilder(builderSelect.value);
-  if (!builder) throw new Error('No builder selected');
-  return builder;
+// Identify the builder from the active tab's URL. Throws a user-facing message
+// when the tab isn't one of the supported builders.
+async function currentBuilder(): Promise<{ builder: BuilderDef; tab: chrome.tabs.Tab }> {
+  const tab = await activeTab();
+  const builder = builderForUrl(tab.url ?? '');
+  if (!builder) {
+    const names = BUILDERS.map((b) => b.label).join(', ');
+    throw new Error(`This tab isn't a supported builder. Open one of: ${names}.`);
+  }
+  return { builder, tab };
 }
 
 async function handleApply(): Promise<void> {
   try {
-    const builder = selectedBuilder();
+    const { builder, tab } = await currentBuilder();
     const prompt = selectedPrompt();
-    const tab = await activeTab();
-    if (builderForUrl(tab.url ?? '')?.id !== builder.id) {
-      setStatus(`Active tab is not a ${builder.label} page — open ${builder.label} first.`, 'error');
-      return;
-    }
     const response = await sendToTab(tab.id!, builder, { type: 'FILL_PROMPT', text: prompt.prompt });
     if (!response.ok) {
       setStatus(response.error, 'error');
@@ -137,12 +138,7 @@ async function handleApply(): Promise<void> {
 async function handleCollect(): Promise<void> {
   try {
     collectButton.disabled = true;
-    const builder = selectedBuilder();
-    const tab = await activeTab();
-    if (builderForUrl(tab.url ?? '')?.id !== builder.id) {
-      setStatus(`Active tab is not a ${builder.label} page — open the app there first.`, 'error');
-      return;
-    }
+    const { builder, tab } = await currentBuilder();
     setStatus('Collecting…');
     const response = await sendToTab(tab.id!, builder, { type: 'COLLECT' });
     if (!response.ok) {
@@ -151,10 +147,12 @@ async function handleCollect(): Promise<void> {
     }
     const pending = await getStored<PendingRun>('pendingRun');
     const samePending = pending && pending.builder === builder.id ? pending : undefined;
-    const metrics = parseBase44Conversation(response.conversation, {
+    const metrics = builder.parser(response.conversation, {
       promptText: samePending?.promptText,
     });
     const rate = await effectiveRate(builder);
+    const cost =
+      metrics.credits === null || rate === null ? null : roundCents(metrics.credits * rate);
     const run: CollectedRun = {
       id: `${builder.id}-${Date.now()}`,
       builder: builder.id,
@@ -167,7 +165,7 @@ async function handleCollect(): Promise<void> {
       wallClockSeconds: metrics.wallClockSeconds,
       credits: metrics.credits,
       creditToUsd: rate,
-      cost: metrics.credits === null ? null : roundCents(metrics.credits * rate),
+      cost,
       model: metrics.model,
       tokens: metrics.tokens,
     };
@@ -301,6 +299,9 @@ async function renderRates(): Promise<void> {
   const overrides = await getRateOverrides();
   ratesList.replaceChildren();
   for (const builder of BUILDERS) {
+    // Only builders that expose a credit-based cost have an editable rate.
+    if (builder.creditToUsd === null) continue;
+    const defaultRate = builder.creditToUsd;
     const row = document.createElement('div');
     row.className = 'rate-row';
     const label = document.createElement('span');
@@ -309,12 +310,12 @@ async function renderRates(): Promise<void> {
     input.type = 'number';
     input.min = '0';
     input.step = '0.01';
-    input.value = String(overrides[builder.id] ?? builder.creditToUsd);
+    input.value = String(overrides[builder.id] ?? defaultRate);
     input.addEventListener('change', () => {
       void (async () => {
         const current = await getRateOverrides();
         const value = Number(input.value);
-        const updated = { ...current, [builder.id]: Number.isFinite(value) ? value : builder.creditToUsd };
+        const updated = { ...current, [builder.id]: Number.isFinite(value) ? value : defaultRate };
         await setStored('creditRates', updated);
         setStatus(`${builder.label} rate updated.`, 'ok');
       })();
@@ -339,8 +340,30 @@ function updatePreview(): void {
   promptPreview.textContent = prompt?.prompt ?? '';
 }
 
+// Show the detected builder for the active tab, and disable the action buttons
+// when the tab isn't a supported builder.
+async function detectBuilder(): Promise<void> {
+  let builder: BuilderDef | undefined;
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    builder = builderForUrl(tab?.url ?? '');
+  } catch {
+    builder = undefined;
+  }
+  if (builder) {
+    builderLabel.textContent = builder.label;
+    builderLabel.classList.remove('unknown');
+    applyButton.disabled = false;
+    collectButton.disabled = false;
+  } else {
+    builderLabel.textContent = `Not a supported builder (${BUILDERS.map((b) => b.label).join(', ')})`;
+    builderLabel.classList.add('unknown');
+    applyButton.disabled = true;
+    collectButton.disabled = true;
+  }
+}
+
 async function init(): Promise<void> {
-  builderSelect.replaceChildren(...BUILDERS.map((b) => new Option(b.label, b.id)));
   try {
     prompts = await loadPrompts();
   } catch (error: unknown) {
@@ -351,6 +374,7 @@ async function init(): Promise<void> {
   promptSelect.addEventListener('change', updatePreview);
   applyButton.addEventListener('click', () => void handleApply());
   collectButton.addEventListener('click', () => void handleCollect());
+  await detectBuilder();
   await renderRuns();
   await renderRates();
 }

@@ -69,6 +69,26 @@ input[type='number'] {
   gap: 8px;
 }
 
+.builder-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.builder-caption {
+  font-weight: 600;
+}
+
+.builder-label {
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.builder-label.unknown {
+  color: #b91c1c;
+  font-weight: 400;
+}
+
 .buttons {
   display: flex;
   gap: 8px;
