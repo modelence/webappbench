@@ -16,7 +16,8 @@
     "https://v0.app/*",
     "https://*.v0.app/*",
     "https://v0.dev/*",
-    "https://*.v0.dev/*"
+    "https://*.v0.dev/*",
+    "https://bolt.new/*"
   ],
   "icons": {
     "16": "icons/icon-16.png",
@@ -76,6 +77,17 @@
       ],
       "js": ["src/content/v0.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://bolt.new/*"],
+      "js": ["src/content/bolt.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://bolt.new/*"],
+      "js": ["src/content/bolt-main.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
     }
   ]
 }

@@ -4,6 +4,7 @@ import { parseModelenceConversation } from './modelence-parse.js';
 import { parseLovableConversation } from './lovable-parse.js';
 import { parseReplitConversation } from './replit-parse.js';
 import { parseV0Conversation } from './v0-parse.js';
+import { parseBoltConversation } from './bolt-parse.js';
 
 export const BUILDERS: readonly BuilderDef[] = [
   {
@@ -63,6 +64,19 @@ export const BUILDERS: readonly BuilderDef[] = [
     // through at a $1/credit rate.
     creditToUsd: 1,
     creditRateNote: 'v0 credits are 1:1 with USD ($1/credit).',
+  },
+  {
+    id: 'bolt',
+    label: 'Bolt',
+    hosts: ['bolt.new'],
+    contentScripts: [
+      { file: 'src/content/bolt.js', world: 'ISOLATED' },
+      { file: 'src/content/bolt-main.js', world: 'MAIN' },
+    ],
+    parser: parseBoltConversation,
+    // Bolt's chat payload exposes no cost signal — duration only.
+    creditToUsd: null,
+    creditRateNote: 'No cost signal available yet — duration only.',
   },
 ];
 
