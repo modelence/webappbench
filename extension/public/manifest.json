@@ -12,7 +12,11 @@
     "https://lovable.dev/*",
     "https://*.lovable.dev/*",
     "https://replit.com/*",
-    "https://*.replit.com/*"
+    "https://*.replit.com/*",
+    "https://v0.app/*",
+    "https://*.v0.app/*",
+    "https://v0.dev/*",
+    "https://*.v0.dev/*"
   ],
   "icons": {
     "16": "icons/icon-16.png",
@@ -61,6 +65,16 @@
     {
       "matches": ["https://replit.com/*", "https://*.replit.com/*"],
       "js": ["src/content/replit.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://v0.app/*",
+        "https://*.v0.app/*",
+        "https://v0.dev/*",
+        "https://*.v0.dev/*"
+      ],
+      "js": ["src/content/v0.js"],
       "run_at": "document_idle"
     }
   ]

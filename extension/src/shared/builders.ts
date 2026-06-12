@@ -3,6 +3,7 @@ import { parseBase44Conversation } from './base44-parse.js';
 import { parseModelenceConversation } from './modelence-parse.js';
 import { parseLovableConversation } from './lovable-parse.js';
 import { parseReplitConversation } from './replit-parse.js';
+import { parseV0Conversation } from './v0-parse.js';
 
 export const BUILDERS: readonly BuilderDef[] = [
   {
@@ -51,6 +52,17 @@ export const BUILDERS: readonly BuilderDef[] = [
     // $1/unit rate (not an editable per-credit price).
     creditToUsd: 1,
     creditRateNote: 'Agent Usage is reported in USD directly (no per-credit rate).',
+  },
+  {
+    id: 'v0',
+    label: 'v0',
+    hosts: ['v0.app', 'v0.dev'],
+    contentScripts: [{ file: 'src/content/v0.js', world: 'ISOLATED' }],
+    parser: parseV0Conversation,
+    // v0 credits are 1:1 with USD ("a $1 credit equals $1 USD"), so cost passes
+    // through at a $1/credit rate.
+    creditToUsd: 1,
+    creditRateNote: 'v0 credits are 1:1 with USD ($1/credit).',
   },
 ];
 
