@@ -8,7 +8,11 @@
     "https://app.base44.com/*",
     "https://base44.com/*",
     "https://cloud.modelence.com/*",
-    "https://*.modelence.com/*"
+    "https://*.modelence.com/*",
+    "https://lovable.dev/*",
+    "https://*.lovable.dev/*",
+    "https://replit.com/*",
+    "https://*.replit.com/*"
   ],
   "icons": {
     "16": "icons/icon-16.png",
@@ -48,6 +52,16 @@
       "js": ["src/content/modelence-main.js"],
       "world": "MAIN",
       "run_at": "document_start"
+    },
+    {
+      "matches": ["https://lovable.dev/*", "https://*.lovable.dev/*"],
+      "js": ["src/content/lovable.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://replit.com/*", "https://*.replit.com/*"],
+      "js": ["src/content/replit.js"],
+      "run_at": "document_idle"
     }
   ]
 }

@@ -242,7 +242,12 @@ function runElement(run: CollectedRun): HTMLElement {
   const detail = document.createElement('div');
   detail.className = 'run-detail';
   const parts: string[] = [];
-  if (run.credits !== null) parts.push(`${run.credits} credits × $${run.creditToUsd}`);
+  // Show the credits→USD breakdown only for true credit-based builders; a rate
+  // of 1 means the builder reported dollars directly (e.g. Replit), so the cost
+  // metric already says it all.
+  if (run.credits !== null && run.creditToUsd !== null && run.creditToUsd !== 1) {
+    parts.push(`${run.credits} credits × $${run.creditToUsd}`);
+  }
   if (run.model) parts.push(run.model);
   if (run.tokens) parts.push(`${run.tokens.totalTokens.toLocaleString()} tokens`);
   detail.textContent = parts.join(' · ');
@@ -299,8 +304,9 @@ async function renderRates(): Promise<void> {
   const overrides = await getRateOverrides();
   ratesList.replaceChildren();
   for (const builder of BUILDERS) {
-    // Only builders that expose a credit-based cost have an editable rate.
-    if (builder.creditToUsd === null) continue;
+    // Only builders that expose an editable per-credit rate. null = no cost
+    // signal; 1 = the builder already reports USD (e.g. Replit), nothing to set.
+    if (builder.creditToUsd === null || builder.creditToUsd === 1) continue;
     const defaultRate = builder.creditToUsd;
     const row = document.createElement('div');
     row.className = 'rate-row';

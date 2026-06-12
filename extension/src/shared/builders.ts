@@ -1,6 +1,8 @@
 import type { BuilderDef } from './types.js';
 import { parseBase44Conversation } from './base44-parse.js';
 import { parseModelenceConversation } from './modelence-parse.js';
+import { parseLovableConversation } from './lovable-parse.js';
+import { parseReplitConversation } from './replit-parse.js';
 
 export const BUILDERS: readonly BuilderDef[] = [
   {
@@ -29,6 +31,26 @@ export const BUILDERS: readonly BuilderDef[] = [
     // can't derive USD yet. Duration is reported; cost stays blank.
     creditToUsd: null,
     creditRateNote: 'No cost signal available yet — duration only.',
+  },
+  {
+    id: 'lovable',
+    label: 'Lovable',
+    hosts: ['lovable.dev', 'lovable.app'],
+    contentScripts: [{ file: 'src/content/lovable.js', world: 'ISOLATED' }],
+    parser: parseLovableConversation,
+    creditToUsd: 0.25,
+    creditRateNote: 'Monthly billing: $0.25/credit (Pro $25/mo ÷ 100 credits).',
+  },
+  {
+    id: 'replit',
+    label: 'Replit',
+    hosts: ['replit.com', 'replit.app', 'repl.co'],
+    contentScripts: [{ file: 'src/content/replit.js', world: 'ISOLATED' }],
+    parser: parseReplitConversation,
+    // Replit reports "Agent Usage" directly in USD, so cost passes through at a
+    // $1/unit rate (not an editable per-credit price).
+    creditToUsd: 1,
+    creditRateNote: 'Agent Usage is reported in USD directly (no per-credit rate).',
   },
 ];
 
