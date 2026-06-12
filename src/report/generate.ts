@@ -23,17 +23,48 @@ export interface RunKey {
   runIdx: number;
 }
 
+/**
+ * User-reported duration/cost from submissions.yaml, applied over the scored
+ * artifacts at render time so editing those fields updates the leaderboard
+ * without a full re-score. `duration` is seconds; `cost` is USD.
+ */
+export interface RunMeta {
+  duration?: number;
+  cost?: number;
+}
+
 export async function generateReport(
   artifactsRoot: string,
   outFile: string,
   includeOnly?: RunKey[],
+  metaOverrides?: Map<string, RunMeta>,
 ): Promise<RunSummary[]> {
   const collected = await collectRuns(artifactsRoot);
   const runs = includeOnly ? filterRuns(collected, includeOnly) : collected;
+  if (metaOverrides) applyMetaOverrides(runs, metaOverrides);
   const html = renderHtml(runs, await readPackageVersion());
   await writeFile(outFile, html, 'utf8');
   await writeFile(jsonOutPath(outFile), serializeRuns(runs), 'utf8');
   return runs;
+}
+
+/**
+ * Overlay user-reported duration/cost onto each run's `cost` scorer details so
+ * the Duration/Cost columns reflect the latest submissions.yaml without a
+ * re-score. Mirrors the cost scorer: duration (seconds) becomes `ttwbMs`, cost
+ * (USD) becomes `cost`.
+ */
+function applyMetaOverrides(runs: RunSummary[], overrides: Map<string, RunMeta>): void {
+  for (const run of runs) {
+    const meta = overrides.get(runKey(run.tool, run.promptId, run.runIdx));
+    if (!meta) continue;
+    const cost = run.scores['cost'];
+    if (!cost) continue;
+    const details = { ...(cost.details ?? {}) };
+    if (meta.duration !== undefined) details['ttwbMs'] = meta.duration * 1000;
+    if (meta.cost !== undefined) details['cost'] = meta.cost;
+    run.scores = { ...run.scores, cost: { ...cost, details } };
+  }
 }
 
 /**
