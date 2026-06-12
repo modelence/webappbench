@@ -20,7 +20,7 @@ export function getLlmClient(): OpenAI {
       maxRetries: 2,
       defaultHeaders: {
         'HTTP-Referer': 'https://github.com/modelence/benchmark',
-        'X-Title': 'AI Sitebuilder Benchmark',
+        'X-Title': 'WebAppBench',
       },
     });
   }

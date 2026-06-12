@@ -63,6 +63,29 @@ function meanGenDurationMs(runs: RunSummary[]): number | null {
   return values.reduce((sum, v) => sum + v, 0) / values.length;
 }
 
+/**
+ * Generation cost for a run, in USD: the cost scorer's user-reported `cost`
+ * (platform credits converted to dollars at the submitter's rate).
+ */
+function genCostUsd(scores: Record<string, ScorerResult>): number | null {
+  const cost = scores['cost']?.details?.['cost'];
+  if (typeof cost !== 'number' || !Number.isFinite(cost) || cost < 0) return null;
+  return cost;
+}
+
+function formatCost(usd: number | null): string {
+  if (usd === null) return '—';
+  return `$${usd.toFixed(2)}`;
+}
+
+function meanGenCostUsd(runs: RunSummary[]): number | null {
+  const values = runs
+    .map((r) => genCostUsd(r.scores))
+    .filter((v): v is number => v !== null);
+  if (values.length === 0) return null;
+  return values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
 function runKey(tool: string, promptId: string, runIdx: number): string {
   return `${tool}/${promptId}/${runIdx}`;
 }
@@ -102,6 +125,10 @@ function serializeRuns(runs: RunSummary[]): string {
               dimensions: composite.dimensions,
             }
           : null,
+        // User-reported, informational (not part of composite). Surfaced here
+        // because scores.cost.details is trimmed from the JSON output.
+        durationMs: genDurationMs(r.scores),
+        costUsd: genCostUsd(r.scores),
         scores: trimmedScores,
       };
     }),
@@ -161,12 +188,14 @@ async function loadRun(runDir: string): Promise<RunSummary | null> {
 
 // Ordered numerically within each letter group: f → c → v → s → cost.
 // Matches the console output order in src/scorers/progress.ts.
+// Note: the `cost` scorer is intentionally NOT listed here. It is surfaced as
+// dedicated Duration + Cost columns (see genDurationMs / genCostUsd) rather
+// than as a per-scorer column, so it must not also render in dimHeaders.
 const ALL_DIMS = [
   'f1', 'f2', 'f4', 'f5', 'f6', 'f7', 'f8',
   'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9',
   'v1', 'v2', 'v4',
   's1', 's2', 's3', 's4',
-  'cost',
 ] as const;
 // Dimensions that require an extracted source ZIP — used to hide entire columns
 // when no submission in the report has source attached. (s1 is omitted — it
@@ -321,6 +350,7 @@ function renderHtml(runs: RunSummary[], version: string): string {
 
   const dimHeaders = visibleDims.map(thWithTooltip).join('');
   const durationHeader = `<th data-tip="Generation duration: how long the tool took to produce a working build (user-reported duration). Informational only — not included in composite score.">Duration</th>`;
+  const costHeader = `<th data-tip="Generation cost in USD: platform credits converted to dollars at the submitter's rate (user-reported). Informational only — not included in composite score.">Cost</th>`;
 
   // Four dimension columns shown between the composite and the per-scorer
   // columns. Order matches DIMENSION_ORDER (Functional → Code → Visual →
@@ -371,6 +401,7 @@ function renderHtml(runs: RunSummary[], version: string): string {
       <td class="ver-cell">${escape(r.toolVersion)}</td>
       ${dimCells}
       <td class="ver-cell">${escape(formatDuration(genDurationMs(r.scores)))}</td>
+      <td class="ver-cell">${escape(formatCost(genCostUsd(r.scores)))}</td>
     </tr>`;
   }).join('\n');
 
@@ -396,13 +427,14 @@ function renderHtml(runs: RunSummary[], version: string): string {
         <td class="runs-cell">${agg.runs} run${agg.runs === 1 ? '' : 's'}</td>
         ${dimCells}
         <td class="ver-cell">${escape(formatDuration(meanGenDurationMs(runs.filter((r) => r.tool === tool))))}</td>
+        <td class="ver-cell">${escape(formatCost(meanGenCostUsd(runs.filter((r) => r.tool === tool))))}</td>
       </tr>`;
     }).join('\n');
 
   // Column counts include the 4 new dimension cells (between composite and per-scorer).
-  // +1 in each: the trailing Duration column after the per-scorer columns.
-  const leaderColCount = 5 + DIMENSION_COLUMN_ORDER.length + visibleDims.length;
-  const perRunColCount  = 6 + DIMENSION_COLUMN_ORDER.length + visibleDims.length;
+  // +2 in each: the trailing Duration and Cost columns after the per-scorer columns.
+  const leaderColCount = 6 + DIMENSION_COLUMN_ORDER.length + visibleDims.length;
+  const perRunColCount  = 7 + DIMENSION_COLUMN_ORDER.length + visibleDims.length;
   const generatedAt = new Date().toISOString();
 
   return `<!DOCTYPE html>
@@ -410,7 +442,7 @@ function renderHtml(runs: RunSummary[], version: string): string {
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>AI sitebuilder benchmark</title>
+<title>WebAppBench</title>
 <script src="https://unpkg.com/lucide@latest"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -728,7 +760,7 @@ function renderHtml(runs: RunSummary[], version: string): string {
 <header class="site-header">
   <div class="header-inner">
     <div class="header-text">
-      <div class="header-title">AI sitebuilder benchmark</div>
+      <div class="header-title">WebAppBench</div>
       <div style="color:var(--text-dim);font-size:.88rem;margin-top:.25rem">
         Reproducible, open-source scoring for AI-generated websites
       </div>
@@ -760,6 +792,7 @@ function renderHtml(runs: RunSummary[], version: string): string {
         <th>Runs</th>
         ${dimHeaders}
         ${durationHeader}
+        ${costHeader}
       </tr></thead>
       <tbody>${summaryRows || `<tr><td colspan="${leaderColCount}" class="empty">No scored runs yet.</td></tr>`}</tbody>
     </table>
@@ -777,6 +810,7 @@ function renderHtml(runs: RunSummary[], version: string): string {
         <th>Prompt</th><th>URL</th><th>Version</th>
         ${dimHeaders}
         ${durationHeader}
+        ${costHeader}
       </tr></thead>
       <tbody>${perRunRows || `<tr><td colspan="${perRunColCount}" class="empty">No scored runs yet.</td></tr>`}</tbody>
     </table>
@@ -825,7 +859,7 @@ function renderHtml(runs: RunSummary[], version: string): string {
 </main>
 
 <footer class="site-footer">
-  AI Sitebuilder Benchmark · open-source · scores captured at submission time · URL results may change
+  WebAppBench · open-source · scores captured at submission time · URL results may change
 </footer>
 
 <script>
