@@ -19,7 +19,7 @@ import { runC6, C6_VERSION } from './code-quality/c6-complexity.ts';
 import { runC7, C7_VERSION } from './code-quality/c7-maintainability.ts';
 import { runC8, C8_VERSION } from './code-quality/c8-install.ts';
 import { runS1, S1_VERSION } from './security/s1-secrets.ts';
-import { runS2, S2_VERSION } from './security/s2-auth.ts';
+import { runS2, S2_VERSION } from './security/s2-client-security.ts';
 import { runS3, S3_VERSION } from './security/s3-vuln.ts';
 import { runS4, S4_VERSION } from './security/s4-backend.ts';
 import { runF7, F7_VERSION } from './functional/f7-auth-roundtrip.ts';
