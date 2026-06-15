@@ -26,10 +26,19 @@ export async function fetchWithTimeout(url: string, init: RequestInit): Promise<
   }
 }
 
-// A data-bearing API response captured from an authenticated page. Records
-// enough of the request to replay it as another user — including the method and
-// POST body, since many backends (Modelence, GraphQL, tRPC) fetch data via POST
-// RPC rather than GET.
+// How a captured response carries the user's data:
+//   json     — a JSON API/RPC response (replayable, record-countable)
+//   document — a server-rendered HTML page (RSC/SSR apps embed data here)
+//   rsc      — a React Server Components flight payload (text/x-component),
+//              fetched on client-side navigations and Server Action responses
+export type CapturedKind = 'json' | 'document' | 'rsc';
+
+// A data-bearing response captured from an authenticated page. Records enough
+// of the request to replay it as another user — including the method and POST
+// body, since many backends (Modelence, GraphQL, tRPC) fetch data via POST RPC
+// rather than GET. Server-rendered apps (Next.js App Router / RSC) never emit a
+// JSON data response at all, so HTML documents and RSC payloads are captured
+// too and matched by a caller-supplied marker instead of record counting.
 export interface CapturedDataResponse {
   url: string;
   method: string;
@@ -37,10 +46,12 @@ export interface CapturedDataResponse {
   postData: string | null;
   // Content-type of the original request (so the replay matches it).
   requestContentType: string | null;
-  // Number of records the response body carried (array length, or nested array).
+  // Number of records the response body carried. Only meaningful for `json`
+  // captures; for rendered captures it is 1 when the marker was found, else 0.
   recordCount: number;
   // The raw response body text (for extracting an identifying value).
   body: string;
+  kind: CapturedKind;
 }
 
 interface Capture {
@@ -48,30 +59,48 @@ interface Capture {
   method: string;
   postData: string | null;
   requestContentType: string | null;
+  kind: CapturedKind;
   bodyPromise: Promise<string | null>;
 }
 
-// Attach a response collector to a page. Captures JSON responses to GET and POST
-// requests so the caller can later pick the one that looks like the user's data.
-// POST is included because RPC/GraphQL data layers read via POST. Returns a
-// stop() that resolves the best candidate (largest record array).
-export function captureDataResponses(page: Page): { stop: () => Promise<CapturedDataResponse | null> } {
+// Obvious non-data endpoints (auth, login, session bootstrap, static).
+const SKIP_URL = /\/(auth|token|login|signin|sign-in|signup|sign-up|session|_system|config|health|favicon)\b/i;
+
+function classifyResponse(contentType: string, resourceType: string): CapturedKind | null {
+  if (/application\/json|text\/json/i.test(contentType)) return 'json';
+  if (/text\/x-component/i.test(contentType)) return 'rsc';
+  if (/text\/html/i.test(contentType) && resourceType === 'document') return 'document';
+  return null;
+}
+
+// Attach a response collector to a page. Captures JSON responses to GET and
+// POST requests (POST because RPC/GraphQL data layers read via POST), plus
+// rendered payloads (HTML documents, RSC flight responses) for apps that fetch
+// data server-side and never expose a JSON endpoint. Returns a stop() that
+// resolves the best candidate: a marker-bearing response when `marker` is
+// given, else the largest JSON record array, else the largest rendered body.
+export function captureDataResponses(
+  page: Page,
+  opts?: { marker?: string },
+): { stop: () => Promise<CapturedDataResponse | null> } {
+  const marker = opts?.marker;
   const captures: Capture[] = [];
 
   const onResponse = (response: import('@playwright/test').Response): void => {
     const ct = response.headers()['content-type'] ?? '';
-    if (!/application\/json|text\/json/i.test(ct)) return;
     const req = response.request();
+    const kind = classifyResponse(ct, req.resourceType());
+    if (!kind) return;
     const method = req.method();
     if (method !== 'GET' && method !== 'POST') return;
     const url = response.url();
-    // Skip obvious non-data endpoints (auth, login, session bootstrap, static).
-    if (/\/(auth|token|login|signin|sign-in|session|_system|config|health|favicon)\b/i.test(url)) return;
+    if (SKIP_URL.test(url)) return;
     captures.push({
       url,
       method,
       postData: req.postData(),
       requestContentType: req.headers()['content-type'] ?? null,
+      kind,
       bodyPromise: response.text().catch(() => null),
     });
   };
@@ -81,25 +110,46 @@ export function captureDataResponses(page: Page): { stop: () => Promise<Captured
   return {
     stop: async (): Promise<CapturedDataResponse | null> => {
       page.off('response', onResponse);
-      let best: CapturedDataResponse | null = null;
+      const resolved: CapturedDataResponse[] = [];
       for (const c of captures) {
         const body = await c.bodyPromise;
         if (!body) continue;
-        const count = recordCount(body);
-        if (count > 0 && (!best || count > best.recordCount)) {
-          best = {
-            url: c.url,
-            method: c.method,
-            postData: c.postData,
-            requestContentType: c.requestContentType,
-            recordCount: count,
-            body,
-          };
-        }
+        const count = c.kind === 'json'
+          ? recordCount(body)
+          : (marker !== undefined && body.includes(marker) ? 1 : 0);
+        resolved.push({
+          url: c.url,
+          method: c.method,
+          postData: c.postData,
+          requestContentType: c.requestContentType,
+          recordCount: count,
+          body,
+          kind: c.kind,
+        });
       }
-      return best;
+      return pickBestCapture(resolved, marker);
     },
   };
+}
+
+// Selection order: a marker-bearing response is the strongest signal that this
+// is the user's data (JSON preferred — it is precisely replayable). Without a
+// marker match, fall back to the largest JSON record list (pre-RSC behavior),
+// then to the largest rendered payload (SSR apps with no JSON data traffic).
+function pickBestCapture(all: CapturedDataResponse[], marker?: string): CapturedDataResponse | null {
+  const withMarker = marker !== undefined ? all.filter((c) => c.body.includes(marker)) : [];
+  const jsonMarked = withMarker.filter((c) => c.kind === 'json');
+  if (jsonMarked.length > 0) return maxBy(jsonMarked, (c) => c.recordCount);
+  if (withMarker.length > 0) return maxBy(withMarker, (c) => c.body.length);
+  const jsonWithRecords = all.filter((c) => c.kind === 'json' && c.recordCount > 0);
+  if (jsonWithRecords.length > 0) return maxBy(jsonWithRecords, (c) => c.recordCount);
+  const rendered = all.filter((c) => c.kind !== 'json');
+  if (rendered.length > 0) return maxBy(rendered, (c) => c.body.length);
+  return null;
+}
+
+function maxBy<T>(items: T[], score: (item: T) => number): T {
+  return items.reduce((best, item) => (score(item) > score(best) ? item : best));
 }
 
 // How many records a JSON body carries. Handles a top-level array, or the

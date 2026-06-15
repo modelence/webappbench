@@ -80,11 +80,11 @@ export interface UserReportedTiming {
   firstRenderAt?: string;
   workingBuildAt?: string;
   // Simpler alternative: total seconds from prompt submission to working build.
-  buildSeconds?: number;
+  duration?: number;
 }
 
 export interface UserReportedCost {
-  credits?: number;
-  usdEstimate?: number;
+  // Approximate USD spent on the run (platform credits converted at retail rate).
+  cost?: number;
   notes?: string;
 }

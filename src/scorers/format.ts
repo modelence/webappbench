@@ -259,13 +259,27 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
       }
 
       case 'c8': {
-        if (d['note']) return String(d['note']).slice(0, 60);
-        const manager = String(d['manager'] ?? '?');
-        const passed = d['exitCode'] === 0 && !d['timedOut'];
-        if (passed) return `${manager} install ok`;
-        const err = d['errorSummary'] as string | undefined;
-        const errSuffix = err ? ` — ${err.slice(0, 60)}` : '';
-        return `${manager} install failed${errSuffix}`;
+        const issues = d['lockfileIssues'] as Array<{ kind: string }> | undefined;
+        const issueKinds = issues?.length ? [...new Set(issues.map((i) => i.kind))].join(', ') : '';
+        // Pass path: `exitCode === 0` means a lockfile installed cleanly. Append
+        // any lock-file hygiene defects that docked the score.
+        if (d['exitCode'] === 0 && !d['timedOut']) {
+          const mgr = String(d['manager'] ?? '?');
+          return issueKinds ? `${mgr} install ok — lockfile issues: ${issueKinds}` : `${mgr} install ok`;
+        }
+        // "No lockfile" / "not on PATH" notes have no manager to name.
+        if (d['note'] && d['lockfilesPresent'] === undefined) return String(d['note']).slice(0, 60);
+        // Fail path: one or more managers were tried and none installed. Name
+        // which lockfiles were present so a stale-extra-lockfile failure reads
+        // clearly (e.g. "pnpm,npm install failed — pnpm: ...").
+        const present = (d['lockfilesPresent'] as string[] | undefined)?.join(',') ?? String(d['manager'] ?? '?');
+        // Private-registry lock-in gets its own clear summary line.
+        if (d['failureCause'] === 'private_registry') {
+          const hosts = (d['privateRegistryHosts'] as string[] | undefined)?.join(', ') ?? 'private registry';
+          return `${present} install failed — private registry (${hosts})`;
+        }
+        const errSuffix = issueKinds ? ` — ${issueKinds}` : (d['errorSummary'] ? ` — ${String(d['errorSummary']).slice(0, 60)}` : '');
+        return `${present} install failed${errSuffix}`;
       }
 
       case 'c9': {
@@ -282,7 +296,7 @@ export function formatScorerDetail(id: string, result: ScorerResult): string {
       case 'cost': {
         const ttfr = d['ttfrMs'] as number | null;
         const ttwb = d['ttwbMs'] as number | null;
-        const usd = d['usdEstimate'] as number | null;
+        const usd = d['cost'] as number | null;
         if (ttfr == null && ttwb == null && usd == null) return 'no data';
         const parts: string[] = [];
         if (ttfr != null) parts.push(`TTFR ${(ttfr / 1000).toFixed(1)}s`);

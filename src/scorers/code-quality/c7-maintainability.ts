@@ -4,13 +4,17 @@ import { getLlmClient, DEFAULT_JUDGE_MODEL, createJudgeCompletion } from '../../
 import { writeJson } from '../../core/artifact.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
 
-export const C7_VERSION = '0.1.0';
+export const C7_VERSION = '0.2.0';
 
 // Token budget for the source excerpt sent to the judge. ~12k chars ≈ 3k tokens
 // keeps the call cheap while letting the model see enough code to form a judgment.
 const MAX_EXCERPT_CHARS = 12_000;
 const MAX_FILES_IN_EXCERPT = 12;
 const MAX_FILE_SIZE_BYTES = 50_000;
+// Dot-directories (.local, .replit, .config, ...) are platform/tooling
+// scaffolding shipped in some exports (e.g. Replit's .local/skills templates),
+// not app code — the walker skips every hidden directory, so this list only
+// needs the visible ones.
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'out', '.cache', 'public']);
 const SOURCE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs']);
 
@@ -193,7 +197,7 @@ async function sampleSourceFiles(sourceDir: string): Promise<SourceFile[]> {
     for (const e of entries) {
       const full = join(current, e.name);
       if (e.isDirectory()) {
-        if (!SKIP_DIRS.has(e.name)) await walk(full);
+        if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) await walk(full);
         continue;
       }
       const ext = extname(e.name).toLowerCase();

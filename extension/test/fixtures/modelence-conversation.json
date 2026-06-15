@@ -1,0 +1,51 @@
+{
+  "chatId": "6a27c4acac752ffbf3abed45",
+  "title": "Agent Chat",
+  "createdAt": "2026-06-09T07:45:48.230Z",
+  "selectedModelId": "claude-opus-4-7",
+  "lastSeenAt": "2026-06-12T02:52:46.141Z",
+  "contextTokens": 91063,
+  "messages": [
+    {
+      "_id": "6a27c4b3ac752ffbf3abed47",
+      "chatId": "6a27c4acac752ffbf3abed45",
+      "position": 1,
+      "role": "user",
+      "content": "Build a multi-user CRM called \"Rolodex\" with real authentication and a real backend.",
+      "steps": [],
+      "status": "completed",
+      "date": "2026-06-09T07:45:55.367Z",
+      "version": 2
+    },
+    {
+      "_id": "6a27c4b3ac752ffbf3abed48",
+      "chatId": "6a27c4acac752ffbf3abed45",
+      "position": 2,
+      "role": "assistant",
+      "content": "",
+      "steps": [
+        {
+          "role": "assistant",
+          "content": [
+            { "type": "text", "text": "I'll build Rolodex as a multi-user CRM on Modelence." },
+            { "type": "tool_use", "id": "toolu_01F3qGYaTECaBHnKAzonTqgM", "name": "Read", "input": { "file_path": "/user-app" } }
+          ],
+          "duration": 3370
+        },
+        {
+          "role": "user",
+          "content": [{ "type": "tool_result", "tool_use_id": "toolu_01F3qGYaTECaBHnKAzonTqgM", "content": "Cannot read a directory.", "is_error": true, "duration": 22 }],
+          "duration": 3370
+        },
+        {
+          "role": "assistant",
+          "content": [{ "type": "tool_use", "id": "toolu_0111DHBwV2CkdYyvor7wR194", "name": "Bash", "input": { "command": "ls -la /user-app" } }],
+          "duration": 2295
+        }
+      ],
+      "duration": 371462,
+      "status": "completed",
+      "date": "2026-06-09T07:52:06.829Z"
+    }
+  ]
+}

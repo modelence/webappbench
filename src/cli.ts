@@ -15,7 +15,7 @@ import { makeProgressHandler } from './scorers/progress.ts';
 import { scoreSubmission } from './scorers/orchestrate.ts';
 import { runOne } from './scorers/score-all.ts';
 import { loadConfig } from './core/config.ts';
-import { generateReport } from './report/generate.ts';
+import { generateReport, type RunMeta } from './report/generate.ts';
 import { generateFixReport, generateFixReportRollup } from './report/fix-report.ts';
 
 const program = new Command();
@@ -113,8 +113,7 @@ interface SubmitOptions {
   promptSubmittedAt?: string;
   firstRenderAt?: string;
   workingBuildAt?: string;
-  credits?: number;
-  usd?: number;
+  cost?: number;
   note?: string;
 }
 
@@ -132,8 +131,7 @@ program
   .option('--prompt-submitted-at <iso>', 'User-reported ISO time prompt was sent')
   .option('--first-render-at <iso>', 'User-reported ISO time first preview appeared')
   .option('--working-build-at <iso>', 'User-reported ISO time build looked correct')
-  .option('--credits <n>', 'User-reported credits spent', parseNonNegativeFloat)
-  .option('--usd <n>', 'User-reported USD cost estimate', parseNonNegativeFloat)
+  .option('--cost <n>', 'User-reported approximate USD cost of the run', parseNonNegativeFloat)
   .option('--note <text>', 'Free-text note stored with cost data')
   .action(async (opts: SubmitOptions) => {
     const { submission, prompt, paths } = await createSubmissionArtifact({
@@ -242,7 +240,12 @@ async function scoreFromConfig(tool: ToolName | undefined, opts: ScoreOptions): 
 
   if (opts.leaderboard) {
     const includeOnly = config.runs.map((r) => ({ tool: r.tool, promptId: r.prompt, runIdx: r.runIdx }));
-    const runs = await generateReport(opts.artifacts, opts.out, includeOnly);
+    const metaOverrides = new Map<string, RunMeta>();
+    for (const r of config.runs) {
+      if (r.duration === undefined && r.cost === undefined) continue;
+      metaOverrides.set(`${r.tool}/${r.prompt}/${r.runIdx}`, { duration: r.duration, cost: r.cost });
+    }
+    const runs = await generateReport(opts.artifacts, opts.out, includeOnly, metaOverrides);
     console.log(`Wrote ${opts.out} with ${runs.length} scored run(s) (entries in ${opts.config} only)`);
   }
   if (failCount > 0) process.exitCode = 1;
@@ -250,26 +253,37 @@ async function scoreFromConfig(tool: ToolName | undefined, opts: ScoreOptions): 
 
 program
   .command('leaderboard')
-  .description('Generate leaderboard.html from scored submissions. By default only runs listed in submissions.yaml are included; pass --all to include every artifact.')
+  .description('Generate leaderboard.html from scored submissions. Applies the latest duration/cost from submissions.yaml without re-scoring. By default only runs listed in submissions.yaml are included; pass --all to include every artifact.')
   .option('-a, --artifacts <dir>', 'Artifacts root', 'artifacts')
   .option('-o, --out <file>', 'Output file', 'leaderboard.html')
   .option('-c, --config <path>', 'Submissions config used to filter runs', 'submissions.yaml')
   .option('--all', 'Include every scored artifact, ignoring the submissions config')
   .action(async (opts: { artifacts: string; out: string; config: string; all?: boolean }) => {
     let includeOnly: { tool: string; promptId: string; runIdx: number }[] | undefined;
-    if (!opts.all) {
-      try {
-        const config = await loadConfig(opts.config);
+    // Overlay user-reported duration/cost from submissions.yaml so editing those
+    // fields updates the leaderboard without a full re-score.
+    const metaOverrides = new Map<string, RunMeta>();
+    try {
+      const config = await loadConfig(opts.config);
+      if (!opts.all) {
         includeOnly = config.runs.map((r) => ({ tool: r.tool, promptId: r.prompt, runIdx: r.runIdx }));
-      } catch (err) {
-        console.warn(
-          `Could not read ${opts.config} (${err instanceof Error ? err.message : String(err)}); including all artifacts.`,
-        );
       }
+      for (const r of config.runs) {
+        if (r.duration === undefined && r.cost === undefined) continue;
+        metaOverrides.set(`${r.tool}/${r.prompt}/${r.runIdx}`, {
+          duration: r.duration,
+          cost: r.cost,
+        });
+      }
+    } catch (err) {
+      console.warn(
+        `Could not read ${opts.config} (${err instanceof Error ? err.message : String(err)}); including all artifacts, no cost overlay.`,
+      );
     }
-    const runs = await generateReport(opts.artifacts, opts.out, includeOnly);
+    const runs = await generateReport(opts.artifacts, opts.out, includeOnly, metaOverrides);
     const scope = includeOnly ? ` (entries in ${opts.config} only)` : '';
-    console.log(`Wrote ${opts.out} with ${runs.length} scored run(s)${scope}`);
+    const overlaid = metaOverrides.size > 0 ? `, ${metaOverrides.size} cost/duration overlay(s)` : '';
+    console.log(`Wrote ${opts.out} with ${runs.length} scored run(s)${scope}${overlaid}`);
   });
 
 program
@@ -311,8 +325,7 @@ function userReportedTimingFrom(opts: SubmitOptions): UserReportedTiming | undef
 
 function userReportedCostFrom(opts: SubmitOptions): UserReportedCost | undefined {
   const c: UserReportedCost = {};
-  if (opts.credits !== undefined) c.credits = opts.credits;
-  if (opts.usd !== undefined) c.usdEstimate = opts.usd;
+  if (opts.cost !== undefined) c.cost = opts.cost;
   if (opts.note) c.notes = opts.note;
   return Object.keys(c).length > 0 ? c : undefined;
 }

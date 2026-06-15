@@ -31,9 +31,9 @@ const entrySchema = z.object({
   promptSubmittedAt: z.string().datetime().optional(),
   firstRenderAt: z.string().datetime().optional(),
   workingBuildAt: z.string().datetime().optional(),
-  buildSeconds: z.number().nonnegative().optional(),
-  credits: z.number().nonnegative().optional(),
-  usd: z.number().nonnegative().optional(),
+  duration: z.number().nonnegative().optional(),  // seconds from prompt submit to working build
+  cost: z.number().nonnegative().optional(),  // approximate USD spent on the run
+
   note: z.string().optional(),
   backend: backendYamlSchema.optional(),
 });

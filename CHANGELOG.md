@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [Unreleased]
+
+### Changed
+
+- **C8 install scorer — multi-manager + graded lock-file hygiene** (`0.1.0` → `0.3.0`). C8 now detects every committed lockfile (added **bun** alongside npm/pnpm/yarn) and runs the strict frozen install for each in its own fresh temp dir, passing if **any** installs cleanly. This fixes false negatives where a tool ships a stale leftover lockfile (e.g. base44's stale `pnpm-lock.yaml` next to a working `package-lock.json`) — c8 previously picked the stale one and failed the whole project. Each failed attempt is now classified — `private_registry` (lockfile pins an unreachable `*.pkg.dev`/GitHub Packages/JFrog/CodeArtifact host behind a 401/403; reported with the offending hosts), `damaged` (unparseable/corrupt lockfile), `out_of_sync` (stale vs `package.json`), or `other`. Score is now **graded** instead of binary: a project that installs starts at 1.0 and is docked for lock-file hygiene defects (duplicate −0.15, out-of-sync −0.20, damaged −0.20, broken private-registry sibling −0.20), floored at 0.5; every deducting issue is enumerated in `details.lockfileIssues[]`. A project that installs via no committed lockfile still scores 0.
+
 ## [0.2.0] — 2026-04-29
 
 Signal quality and shippability release. Closes the largest gaps in the v0.1 scorer set, makes the harness robust against batch stalls, and reshapes the corpus to test stateful applications, not just landing pages.

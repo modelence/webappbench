@@ -188,7 +188,7 @@ const EXCLUDED_PATH_SEGMENTS = ['node_modules', '.git', 'dist', 'build', '.next'
 function isExcludedPath(relPath: string): boolean {
   if (!relPath) return false;
   const segments = relPath.split('/');
-  return segments.some((seg) => EXCLUDED_PATH_SEGMENTS.includes(seg));
+  return segments.some((seg) => EXCLUDED_PATH_SEGMENTS.includes(seg) || seg.startsWith('.'));
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────

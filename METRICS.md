@@ -364,15 +364,15 @@ The force-trigger endpoint is mandatory in F9-bearing prompts so the harness doe
 
 **What it measures:** Whether the committed `package.json` + lockfile actually installs cleanly from a fresh checkout — no workarounds, no patched `node_modules`, no `--legacy-peer-deps`.
 
-**How:** Detects package manager from lockfile presence (`pnpm-lock.yaml` → pnpm, `yarn.lock` → yarn, else → npm). Copies the source tree to a temp directory excluding `node_modules`/`.git`/build artifacts. Runs the strict equivalent of `npm ci`: `npm ci --ignore-scripts` / `pnpm install --frozen-lockfile --ignore-scripts` / `yarn install --frozen-lockfile --ignore-scripts`. 240s timeout. Captures the failure summary (truncated to 400 chars) on non-zero exit.
+**How:** Detects EVERY package manager with a committed lockfile (`pnpm-lock.yaml`/`pnpm-workspace.yaml` → pnpm, `yarn.lock` → yarn, `package-lock.json` → npm, `bun.lock`/`bun.lockb` → bun) — a project may ship more than one. Copies the source tree to a fresh temp directory (per attempt, excluding `node_modules`/`.git`/build artifacts) and runs the strict frozen install for each: `npm ci --ignore-scripts` / `pnpm install --frozen-lockfile --ignore-scripts` / `yarn install --frozen-lockfile --ignore-scripts` / `bun install --frozen-lockfile --ignore-scripts`. 240s timeout per attempt. Every failed attempt is classified — `private_registry` (lockfile pins an unreachable `*.pkg.dev`/GitHub Packages/JFrog/CodeArtifact host behind a 401/403), `damaged` (unparseable/corrupt lockfile), `out_of_sync` (stale lockfile vs `package.json`), or `other` — and the classification is recorded in `details.attempts[]` and `details.lockfileIssues[]`.
 
-**Score:** Binary — 1 (install succeeded) or 0 (any failure: missing lockfile, peer-dep conflict, registry error, postinstall crash, timeout). Missing `package.json` returns null (not applicable).
+**Score:** Graded. **0** if no committed lockfile installs cleanly (the install itself is the floor signal); when every failed attempt is `private_registry`, `details.failureCause = "private_registry"` with the offending hosts. If at least one lockfile installs, the score starts at **1.0** and deducts for lock-file hygiene defects: duplicate lockfiles −0.15, each out-of-sync lockfile −0.20, each damaged lockfile −0.20, each broken private-registry sibling −0.20, floored at **0.5** (a working install never scores below half). All deducting issues are enumerated in `details.lockfileIssues[]`. Missing `package.json` returns null (not applicable); no manager found on PATH returns null (harness gap). Try-all-managers means an extra stale lockfile next to a working one no longer fails the project outright — it installs (via the good lockfile) and is docked for the hygiene defect instead.
 
 **Within-dimension weight (research):** Sub-check 1 of C5 in the research design (10% of Code Quality, split across three sub-checks). Promoted to a top-level scorer here because the failure mode it catches is qualitatively different from bundle-size measurement.
 
 **Why this matters:** AI sitebuilders' hosted environments hide install failures — Lovable/Bolt's runtime has stale `node_modules` from when the tool worked. The committed `package.json` often doesn't actually install on a clean checkout. Nothing else in the harness catches this; C5 measures bundle size on whatever files exist regardless of whether deps would install.
 
-**Gap vs research:** No detection of explicit workarounds (e.g., flagging `--legacy-peer-deps` if a tool's CI script uses it).
+**Gap vs research:** No detection of explicit workarounds (e.g., flagging `--legacy-peer-deps` if a tool's CI script uses it). The `out_of_sync`/`damaged` classification is heuristic (matched against each manager's frozen-install error text), so an unusual error phrasing falls back to `other`.
 
 ---
 
@@ -867,7 +867,7 @@ These are research positions tracked here so they don't get re-debated. None are
 | c5 | `code-quality/c5-bundle-size.ts` | 0.2.0 | Gzipped JS+CSS payload via `page.on('response')` Content-Length (primary); uncompressed source bytes when no network capture (fallback). Lighthouse-aligned thresholds. |
 | c6 | `code-quality/c6-complexity.ts` | 0.1.0 | SonarJS cognitive-complexity threshold 15 |
 | c7 | `code-quality/c7-maintainability.ts` | 0.1.0 | Single judge; 5-criteria rubric; samples up to 12 source files |
-| c8 | `code-quality/c8-install.ts` | 0.1.0 | Detects npm/pnpm/yarn from lockfile; runs strict `ci`/`--frozen-lockfile` in temp dir; 240s timeout |
+| c8 | `code-quality/c8-install.ts` | 0.3.0 | Detects npm/pnpm/yarn/bun from every committed lockfile; runs strict frozen install per manager in a fresh temp dir (240s each); passes if any installs, grades down for lock-file hygiene defects (duplicate/out-of-sync/damaged/private-registry), all enumerated in the JSON report |
 | c9 | `code-quality/c9-seo.ts` | 0.1.0 | 10 configurable checks |
 | v1 | `visual/v1-judge.ts` | 0.2.0 | Single judge; 8 visual + 3 copy-quality defaults + per-prompt `visual_checklist.extra`; copy-quality skipped when `placeholder_copy: true` |
 | v2 | `visual/v2-design.ts` | 0.2.0 | 8 checks: 4 layout (whitespace, contrast, font size, line length) + 4 CSS conventions (box-sizing, prefers-reduced-motion, custom properties, :focus-visible). CSS-rule checks skip when stylesheets are CORS-blocked. |

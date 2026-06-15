@@ -244,9 +244,35 @@ export async function scoreSubmission(
     scoredAt: new Date().toISOString(),
   });
 
-  await writeJson(join(artifactDir, 'scores.json'), results);
+  // When a --scorer filter is active, the unfiltered scorers above produced
+  // null "skipped" stubs. Writing those verbatim would wipe previously-computed
+  // real scores from scores.json. Merge the fresh results over the existing
+  // file so a filtered re-score only updates the scorers it actually ran.
+  const scoresPath = join(artifactDir, 'scores.json');
+  let merged = results;
+  if (opts.only) {
+    const existing = await readScores(scoresPath);
+    if (existing) {
+      merged = { ...existing };
+      for (const [name, result] of Object.entries(results)) {
+        if (opts.only.includes(name)) merged[name] = result;
+      }
+    }
+  }
+  await writeJson(scoresPath, merged);
 
-  return { artifactDir, results };
+  return { artifactDir, results: merged };
+}
+
+async function readScores(path: string): Promise<Record<string, ScorerResult> | null> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(path, 'utf8'));
+    return parsed && typeof parsed === 'object'
+      ? (parsed as Record<string, ScorerResult>)
+      : null;
+  } catch {
+    return null; // no prior scores.json (or unreadable) — nothing to merge
+  }
 }
 
 async function captureMobileScreenshot(

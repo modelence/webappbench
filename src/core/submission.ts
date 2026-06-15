@@ -28,13 +28,12 @@ export const submissionSchema = z.object({
       promptSubmittedAt: z.string().datetime().optional(),
       firstRenderAt: z.string().datetime().optional(),
       workingBuildAt: z.string().datetime().optional(),
-      buildSeconds: z.number().nonnegative().optional(),
+      duration: z.number().nonnegative().optional(),
     })
     .optional(),
   userReportedCost: z
     .object({
-      credits: z.number().nonnegative().optional(),
-      usdEstimate: z.number().nonnegative().optional(),
+      cost: z.number().nonnegative().optional(),
       notes: z.string().optional(),
     })
     .optional(),

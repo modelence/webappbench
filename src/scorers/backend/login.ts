@@ -431,6 +431,13 @@ export async function login(page: Page, url: string, account: Account): Promise<
     // accept it if it reaches the dashboard, instead of prematurely treating the
     // transitional splash as "not logged in" and re-driving the login form.
     if (hasCachedSession(account)) {
+      // The cached state isn't necessarily in THIS context — F7 reuses the main
+      // page, whose context never saw the original login. Inject the cookies
+      // (cookies only: contexts that must keep app storage clean, like F8's
+      // cross-session check, stay clean) and reload so the server session takes
+      // effect before settling.
+      await applyCachedSession(page.context(), account, { cookiesOnly: true }).catch(() => undefined);
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => undefined);
       await settleOnDashboard(page, url);
       if (await isOnDashboard(page)) {
         return { ok: true };
@@ -541,7 +548,16 @@ export async function createContact(page: Page, name: string): Promise<boolean> 
   try {
     await nameField.first().waitFor({ state: 'visible', timeout: 10_000 });
   } catch {
-    return false;
+    // Some apps keep the form behind a "New contact" / "Add contact" button
+    // that opens a dialog or drawer — click it and wait for the form to mount.
+    const opener = page.getByRole('button', { name: /new contact|add contact|add/i });
+    if (!(await opener.count().then((c) => c > 0).catch(() => false))) return false;
+    await opener.first().click().catch(() => undefined);
+    try {
+      await nameField.first().waitFor({ state: 'visible', timeout: 5_000 });
+    } catch {
+      return false;
+    }
   }
   // Fill, then verify it stuck; if the controlled input didn't register the
   // value, fall back to typing it key-by-key (which fires React onChange).
@@ -562,7 +578,14 @@ export async function createContact(page: Page, name: string): Promise<boolean> 
     await fillVerified(companyField.first(), 'BenchCo');
   }
 
-  const addBtn = page.getByRole('button', { name: /add contact|new contact|add|create|save|submit/i });
+  // Prefer the form's real submit control. A bare name regex is ambiguous when
+  // the form lives in a dialog: the "New contact" OPENER button (still on the
+  // page behind the overlay) also matches, and clicking it would no-op instead
+  // of submitting — so try button[type=submit] first and never match the
+  // opener-style "new contact" phrasing as a submit.
+  const addBtn = page
+    .locator('form button[type="submit"]:visible')
+    .or(page.getByRole('button', { name: /add contact|add|create|save|submit/i }));
   if (await addBtn.count().then((c) => c > 0).catch(() => false)) {
     await addBtn.first().click().catch(() => undefined);
   } else {

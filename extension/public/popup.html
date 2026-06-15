@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>WebAppBench Collector</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <img src="logo.svg" alt="WebAppBench" class="logo" />
+      <h1>WebAppBench Collector</h1>
+    </header>
+
+    <main>
+      <section class="controls">
+        <div class="builder-row">
+          <span class="builder-caption">Builder</span>
+          <span id="builder-label" class="builder-label">Detecting…</span>
+        </div>
+        <label>
+          Prompt
+          <select id="prompt-select"></select>
+        </label>
+        <details id="prompt-preview-details">
+          <summary>Prompt preview</summary>
+          <pre id="prompt-preview"></pre>
+        </details>
+        <div class="buttons">
+          <button id="apply-btn" type="button">Apply prompt</button>
+          <button id="collect-btn" type="button">Collect results</button>
+        </div>
+        <p id="status" class="status" hidden></p>
+      </section>
+
+      <section class="results">
+        <h2>Collected runs</h2>
+        <div id="runs-list"></div>
+      </section>
+
+      <details class="settings">
+        <summary>Settings</summary>
+        <div id="rates-list"></div>
+      </details>
+    </main>
+
+    <script type="module" src="src/popup.js"></script>
+  </body>
+</html>

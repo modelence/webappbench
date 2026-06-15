@@ -65,7 +65,7 @@ See [METRICS.md](METRICS.md) for the full per-scorer spec, weights, and rational
 
 | Scorer | Measures |
 |---|---|
-| **Cost** | Self-reported TTFR (time to first render) / TTWB (time to working build) + credits / USD estimate. Not instrumented in v0.1. |
+| **Cost** | Self-reported TTFR (time to first render) / TTWB (time to working build) + approximate USD cost (`cost`, platform credits converted at retail rate). Not instrumented in v0.1. |
 
 When a scorer's input is missing (no source ZIP, unreachable URL, etc.) it returns null and its weight redistributes within the dimension. If a whole dimension is empty, its weight redistributes across the rest.
 
@@ -109,7 +109,7 @@ Declare all (tool, prompt, url) triples in one place, then run a single command.
    - Paste the prompt from `prompts/corpus/<prompt-id>.yaml`.
    - Copy the resulting preview URL into `submissions.yaml`.
    - (Optional) export the source ZIP and reference it in `source:`.
-   - (Optional) record wall-clock timing and credits in the same entry.
+   - (Optional) record wall-clock timing (`duration`) and USD cost (`cost`) in the same entry.
 3. Score everything and generate the leaderboard:
    ```bash
    npm run bench -- score
