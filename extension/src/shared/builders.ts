@@ -5,6 +5,7 @@ import { parseLovableConversation } from './lovable-parse.js';
 import { parseReplitConversation } from './replit-parse.js';
 import { parseV0Conversation } from './v0-parse.js';
 import { parseBoltConversation } from './bolt-parse.js';
+import { parseEmergentConversation } from './emergent-parse.js';
 
 export const BUILDERS: readonly BuilderDef[] = [
   {
@@ -77,6 +78,21 @@ export const BUILDERS: readonly BuilderDef[] = [
     // Bolt's chat payload exposes no cost signal — duration only.
     creditToUsd: null,
     creditRateNote: 'No cost signal available yet — duration only.',
+  },
+  {
+    id: 'emergent',
+    label: 'Emergent',
+    hosts: ['emergent.sh'],
+    contentScripts: [
+      { file: 'src/content/emergent.js', world: 'ISOLATED' },
+      { file: 'src/content/emergent-main.js', world: 'MAIN' },
+    ],
+    parser: parseEmergentConversation,
+    // Emergent bills subscription credits ($20 / 100 = $0.20/credit). The
+    // trajectory's cumulative acc_cost is exactly the per-job "Credits Spent"
+    // shown in the UI's Run Details, so credits pass through at $0.20 each.
+    creditToUsd: 0.2,
+    creditRateNote: 'Monthly billing: $0.20/credit ($20 / 100). Credits = the job\'s "Credits Spent".',
   },
 ];
 
