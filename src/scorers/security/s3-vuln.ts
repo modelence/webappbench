@@ -4,7 +4,7 @@ import { basename, join, relative } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { ScorerResult } from '../types.ts';
 
-export const S3_VERSION = '0.1.2';
+export const S3_VERSION = '0.1.3';
 
 interface AuditVuln {
   name: string;
@@ -68,6 +68,7 @@ export async function runS3(sourceDir: string): Promise<ScorerResult> {
   let effectiveAuditDir = auditDir;
   let tempAuditRoot: string | null = null;
   let generatedLockfile = false;
+  let usedLegacyPeerDeps = false;
 
   if (!hasPackageLock) {
     const pkgText = await readFile(pkgPath, 'utf8').catch(() => '{}');
@@ -94,6 +95,7 @@ export async function runS3(sourceDir: string): Promise<ScorerResult> {
     effectiveAuditDir = prepared.auditDir;
     tempAuditRoot = prepared.tempRoot;
     generatedLockfile = true;
+    usedLegacyPeerDeps = prepared.usedLegacyPeerDeps;
   }
 
   let raw: string | null;
@@ -169,6 +171,7 @@ export async function runS3(sourceDir: string): Promise<ScorerResult> {
       totalVulnerabilities: critical + high + moderate + low,
       auditDir: relative(sourceDir, auditDir) || '.',
       generatedLockfile,
+      ...(usedLegacyPeerDeps ? { usedLegacyPeerDeps: true } : {}),
       topVulnerabilities: vulns
         .sort((a, b) => severityRank(b.severity) - severityRank(a.severity))
         .slice(0, 5),
@@ -178,7 +181,7 @@ export async function runS3(sourceDir: string): Promise<ScorerResult> {
 }
 
 async function prepareGeneratedLockfileAuditDir(auditDir: string): Promise<
-  | { ok: true; auditDir: string; tempRoot: string }
+  | { ok: true; auditDir: string; tempRoot: string; usedLegacyPeerDeps: boolean }
   | { ok: false; error: string }
 > {
   const tempRoot = await mkdtemp(join(tmpdir(), 'benchmark-s3-'));
@@ -190,40 +193,72 @@ async function prepareGeneratedLockfileAuditDir(auditDir: string): Promise<
       filter: (src) => !shouldSkipDir(basename(src)),
     });
 
-    const install = await runCommand(
-      'npm',
-      ['install', '--package-lock-only', '--ignore-scripts', '--omit=dev', '--no-audit', '--fund=false'],
-      tempAuditDir,
-      120_000,
-    );
-    if (install.code !== 0 || install.timedOut) {
-      await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
-      return { ok: false, error: summarizeCommandFailure(install) };
+    const baseArgs = ['install', '--package-lock-only', '--ignore-scripts', '--omit=dev', '--no-audit', '--fund=false'];
+    const install = await runCommand('npm', baseArgs, tempAuditDir, 120_000);
+    if (install.code === 0 && !install.timedOut) {
+      return { ok: true, auditDir: tempAuditDir, tempRoot, usedLegacyPeerDeps: false };
     }
 
-    return { ok: true, auditDir: tempAuditDir, tempRoot };
+    // A peer-dependency conflict (ERESOLVE) is a defect in the project's
+    // package.json, but it's orthogonal to s3's question ("do the declared
+    // dependency VERSIONS carry known CVEs?"). The install/reproducibility
+    // defect is c8's job; here we relax peer resolution so npm audit can still
+    // enumerate vulnerabilities over the declared versions. We only retry when
+    // the strict install failed on ERESOLVE — other failures (network, missing
+    // package, timeout) are genuine and stay reported.
+    if (!install.timedOut && isPeerConflict(install)) {
+      const retry = await runCommand('npm', [...baseArgs, '--legacy-peer-deps'], tempAuditDir, 120_000);
+      if (retry.code === 0 && !retry.timedOut) {
+        return { ok: true, auditDir: tempAuditDir, tempRoot, usedLegacyPeerDeps: true };
+      }
+      await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+      return { ok: false, error: summarizeCommandFailure(retry) };
+    }
+
+    await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+    return { ok: false, error: summarizeCommandFailure(install) };
   } catch (error) {
     await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
 }
 
+// npm 7+ rejects unsatisfiable peer dependencies with ERESOLVE and tells you to
+// retry with --legacy-peer-deps / --force.
+function isPeerConflict(result: CommandResult): boolean {
+  const text = `${result.stderr}\n${result.stdout}`;
+  return /ERESOLVE|legacy-peer-deps|could not resolve dependency|peer dep/i.test(text);
+}
+
 async function findAuditDir(sourceDir: string): Promise<string> {
-  const candidates = [sourceDir];
-  const entries = await readdir(sourceDir, { withFileTypes: true }).catch(() => []);
-  for (const entry of entries) {
-    if (!entry.isDirectory() || shouldSkipDir(entry.name)) continue;
-    candidates.push(join(sourceDir, entry.name));
-  }
-
+  // Collect every package.json dir breadth-first (skipping vendor/build dirs),
+  // shallowest first. Builders wrap the project at different depths: most ship
+  // it at the source root, Bolt one level deep (bolt-new-main/), and Emergent
+  // two levels deep under a monorepo split (emergent-<name>-main/frontend/).
+  // A bounded BFS finds the audit root regardless of wrapper depth.
+  const MAX_DEPTH = 4;
   const packageDirs: string[] = [];
-  for (const candidate of candidates) {
-    const hasPackage = await access(join(candidate, 'package.json'))
-      .then(() => true)
-      .catch(() => false);
-    if (hasPackage) packageDirs.push(candidate);
+  let queue: Array<{ dir: string; depth: number }> = [{ dir: sourceDir, depth: 0 }];
+
+  while (queue.length > 0) {
+    const next: Array<{ dir: string; depth: number }> = [];
+    for (const { dir, depth } of queue) {
+      const hasPackage = await access(join(dir, 'package.json'))
+        .then(() => true)
+        .catch(() => false);
+      if (hasPackage) packageDirs.push(dir);
+      if (depth >= MAX_DEPTH) continue;
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        if (!entry.isDirectory() || shouldSkipDir(entry.name) || entry.name.startsWith('.')) continue;
+        next.push({ dir: join(dir, entry.name), depth: depth + 1 });
+      }
+    }
+    queue = next;
   }
 
+  // Prefer the shallowest package dir that already ships a lockfile (npm audit
+  // resolves the graph directly); otherwise fall back to the shallowest one.
   for (const dir of packageDirs) {
     if (await hasLockfile(dir)) return dir;
   }
