@@ -3,7 +3,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import type { ScorerContext, ScorerResult } from '../types.ts';
 import { runSemgrep, runTrufflehog, type ExternalFinding, type ScannerResult } from './external-scanners.ts';
 
-export const S1_VERSION = '0.3.0';
+export const S1_VERSION = '0.4.0';
 
 // S1 has two sub-checks per the research design:
 //  1. Hardcoded secrets in source (binary — any finding zeros this half).
@@ -15,6 +15,10 @@ export const S1_VERSION = '0.3.0';
 // Either sub-check is N/A when its input is missing (no source ZIP / no fetchable URL).
 // The final score is the mean of whichever sub-checks ran.
 
+// Dot-directories (.local, .replit, .config, ...) are platform/tooling
+// scaffolding shipped in some exports (e.g. Replit's .local/skills templates),
+// not app code — the walker skips every hidden directory, so this list only
+// needs the visible ones.
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'out', '.cache']);
 const TEXT_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.html', '.json', '.env', '.config', '.yaml', '.yml', '.toml', '.sh']);
 
@@ -322,7 +326,7 @@ async function collectFiles(dir: string): Promise<string[]> {
     const entries = await readdir(current, { withFileTypes: true }).catch(() => []);
     for (const e of entries) {
       if (e.isDirectory()) {
-        if (!SKIP_DIRS.has(e.name)) await walk(join(current, e.name));
+        if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) await walk(join(current, e.name));
       } else {
         const ext = extname(e.name).toLowerCase();
         if (TEXT_EXTS.has(ext) || e.name === '.env.local' || e.name === '.env.development') {

@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { ScorerResult } from '../types.ts';
 
-export const C2_VERSION = '0.1.0';
+export const C2_VERSION = '0.2.0';
 
 const execFileAsync = promisify(execFile);
 
@@ -147,7 +147,7 @@ async function containsTsFiles(dir: string): Promise<boolean> {
   const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
   for (const e of entries) {
     if (e.isFile() && (e.name.endsWith('.ts') || e.name.endsWith('.tsx'))) return true;
-    if (e.isDirectory() && e.name !== 'node_modules') {
+    if (e.isDirectory() && e.name !== 'node_modules' && !e.name.startsWith('.')) {
       if (await containsTsFiles(join(dir, e.name))) return true;
     }
   }
@@ -161,7 +161,7 @@ async function countLoc(dir: string): Promise<number> {
   async function walk(current: string): Promise<void> {
     const entries = await readdir(current, { withFileTypes: true }).catch(() => []);
     for (const e of entries) {
-      if (e.isDirectory() && e.name !== 'node_modules') await walk(join(current, e.name));
+      if (e.isDirectory() && e.name !== 'node_modules' && !e.name.startsWith('.')) await walk(join(current, e.name));
       else if (e.isFile() && exts.has(e.name.slice(e.name.lastIndexOf('.')))) {
         const text = await readFile(join(current, e.name), 'utf8').catch(() => '');
         total += text.split('\n').filter((l) => l.trim()).length;

@@ -4,9 +4,13 @@ import { ESLint } from 'eslint';
 import sonarjs from 'eslint-plugin-sonarjs';
 import type { ScorerResult } from '../types.ts';
 
-export const C6_VERSION = '0.1.0';
+export const C6_VERSION = '0.2.0';
 
 const LINT_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs']);
+// Dot-directories (.local, .replit, .config, ...) are platform/tooling
+// scaffolding shipped in some exports (e.g. Replit's .local/skills templates),
+// not app code — the walker skips every hidden directory, so this list only
+// needs the visible ones.
 const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'out', '.cache']);
 
 // Cognitive complexity threshold per function above which it's flagged
@@ -91,7 +95,7 @@ async function collectFiles(dir: string): Promise<string[]> {
     const entries = await readdir(current, { withFileTypes: true }).catch(() => []);
     for (const e of entries) {
       if (e.isDirectory()) {
-        if (!SKIP_DIRS.has(e.name)) await walk(join(current, e.name));
+        if (!SKIP_DIRS.has(e.name) && !e.name.startsWith('.')) await walk(join(current, e.name));
       } else if (LINT_EXTS.has(extname(e.name).toLowerCase())) {
         result.push(join(current, e.name));
       }

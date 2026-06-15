@@ -1,4 +1,5 @@
 import type { APIRequestContext, Browser } from '@playwright/test';
+import type { Account } from '../../core/backend.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
 import { captureDataResponses, extractIdentifier, errMsg, type CapturedDataResponse } from '../backend/auth.ts';
 import { login, createContact, applyCachedSession } from '../backend/login.ts';
@@ -21,7 +22,7 @@ async function replay(
   return { status: res.status(), body: await res.text().catch(() => '') };
 }
 
-export const S4_VERSION = '0.2.0';
+export const S4_VERSION = '0.4.0';
 
 // S4 — Backend security probes. Runtime probes that catch server-side
 // authorization failures (the canonical "RLS off, every user reads every other
@@ -30,8 +31,11 @@ export const S4_VERSION = '0.2.0';
 // Fully credential-driven — the only inputs are user A's and user B's logins.
 // The harness:
 //   1. signs in as B through the real UI, seeds a uniquely-marked record as B,
-//      and observes B's dashboard traffic to auto-discover the API request that
-//      returns B's data (the marker is the leak identifier);
+//      and observes B's dashboard traffic to auto-discover the response that
+//      carries B's data (the marker is the leak identifier). This covers JSON
+//      APIs and server-rendered apps alike: RSC/SSR apps (e.g. Next.js App
+//      Router) embed the data in the HTML document or an RSC flight payload
+//      and never emit a JSON data response;
 //   2. replays that request with NO session (unauth probe) — must be rejected;
 //   3. signs in as A in a fresh context and replays B's request from A's session
 //      (cross-user probe) — must NOT return B's marker.
@@ -72,6 +76,74 @@ interface ProbeResult {
   note: string;
 }
 
+// One pass of phase 1: log in as B on a fresh context, seed the marked record,
+// reload the dashboard under capture, and return whatever was observed plus
+// step-by-step diagnostics (surfaced in the result so an N/A is actionable).
+interface SeedAttempt {
+  loginOk: boolean;
+  loginReason?: string;
+  formDriven: boolean;
+  markerVisibleAfterSeed: boolean;
+  markerVisibleAfterReload: boolean;
+  bData: CapturedDataResponse | null;
+}
+
+// A captured response is usable when the leak identifier can be derived from
+// it — either the seeded marker is present, or it is JSON with an id-like field.
+function seedUsable(attempt: SeedAttempt, seedMarker: string): boolean {
+  if (!attempt.bData) return false;
+  return attempt.bData.body.includes(seedMarker) || extractIdentifier(attempt.bData.body) !== null;
+}
+
+async function seedAndCaptureAsB(
+  browser: Browser,
+  url: string,
+  userB: Account,
+  seedMarker: string,
+): Promise<SeedAttempt> {
+  const ctxB = await browser.newContext({ viewport: { width: 1440, height: 900 } });
+  try {
+    await applyCachedSession(ctxB, userB);
+    const pageB = await ctxB.newPage();
+    const loginB = await login(pageB, url, userB);
+    if (!loginB.ok) {
+      return { loginOk: false, loginReason: loginB.reason, formDriven: false, markerVisibleAfterSeed: false, markerVisibleAfterReload: false, bData: null };
+    }
+    // Seed a marked record as B, then confirm it actually rendered on the
+    // dashboard before probing — if the seed silently failed (wrong page), the
+    // data fetch would carry no records and the capture would come up empty.
+    const formDriven = await createContact(pageB, seedMarker).catch(() => false);
+    const markerVisibleAfterSeed = await pageB
+      .getByText(seedMarker, { exact: false })
+      .first()
+      .waitFor({ state: 'visible', timeout: 8_000 })
+      .then(() => true)
+      .catch(() => false);
+    // The marker lets the capture match server-rendered payloads (HTML / RSC)
+    // in addition to JSON record lists — RSC apps have no JSON data traffic.
+    const capture = captureDataResponses(pageB, { marker: seedMarker });
+    // RELOAD THE CURRENT (dashboard) URL — not the app root. login() leaves us on
+    // the authenticated dashboard route (e.g. /contacts); navigating back to `/`
+    // would render the logged-out splash and fetch nothing, so the data capture
+    // would see no record list. reload() re-fetches the dashboard's own data.
+    await pageB.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
+    // Wait for the seeded record to re-render — proves the data fetch completed
+    // within the capture window (Clerk re-hydration on reload can delay it).
+    const markerVisibleAfterReload = await pageB
+      .getByText(seedMarker, { exact: false })
+      .first()
+      .waitFor({ state: 'visible', timeout: 12_000 })
+      .then(() => true)
+      .catch(() => false);
+    await pageB.waitForTimeout(1500);
+    await pageB.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
+    const bData = await capture.stop();
+    return { loginOk: true, formDriven, markerVisibleAfterSeed, markerVisibleAfterReload, bData };
+  } finally {
+    await ctxB.close().catch(() => undefined);
+  }
+}
+
 export async function runS4(ctx: ScorerContext): Promise<ScorerResult> {
   const start = Date.now();
   const backend = ctx.submission.backend;
@@ -86,52 +158,41 @@ export async function runS4(ctx: ScorerContext): Promise<ScorerResult> {
   // dashboard has data to fetch even on a fresh account, and (b) the marker is a
   // guaranteed-unique identifier the cross-user probe checks for — more reliable
   // than guessing an id field. (S4 thus writes one record, owned by B.)
-  const ctxB = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  let bData: CapturedDataResponse | null = null;
-  let bIdentifier: string | null = null;
+  //
+  // S4 is usually B's FIRST login of the run, which can be an interactive (OTP)
+  // login — and on heavy SPAs the freshly-OTP'd page sometimes never re-hydrates
+  // to the dashboard (see settleOnDashboard), so the seed lands on the splash
+  // and nothing is captured. The successful login caches B's session, so a
+  // SECOND attempt on a fresh context loads straight onto the dashboard (the
+  // same path F8 takes) — retry once before giving up.
   const seedMarker = `S4_PROBE_${ctx.submission.runIdx}_${Date.now().toString(36)}`;
-  try {
-    await applyCachedSession(ctxB, backend.userB);
-    const pageB = await ctxB.newPage();
-    const loginB = await login(pageB, url, backend.userB);
-    if (!loginB.ok) {
-      return naResult(`could not sign in as user B: ${loginB.reason ?? 'unknown'}`, start);
+  let attempt = await seedAndCaptureAsB(browser, url, backend.userB, seedMarker);
+  if (!attempt.loginOk) {
+    return naResult(`could not sign in as user B: ${attempt.loginReason ?? 'unknown'}`, start);
+  }
+  let attempts = 1;
+  if (!seedUsable(attempt, seedMarker)) {
+    const retry = await seedAndCaptureAsB(browser, url, backend.userB, seedMarker);
+    attempts = 2;
+    if (retry.loginOk && (seedUsable(retry, seedMarker) || (retry.bData && !attempt.bData))) {
+      attempt = retry;
     }
-    // Seed a marked record as B, then confirm it actually rendered on the
-    // dashboard before probing — if the seed silently failed (wrong page), the
-    // data fetch would carry no records and the capture would come up empty.
-    await createContact(pageB, seedMarker).catch(() => undefined);
-    await pageB
-      .getByText(seedMarker, { exact: false })
-      .first()
-      .waitFor({ state: 'visible', timeout: 8_000 })
-      .catch(() => undefined);
-    const capture = captureDataResponses(pageB);
-    // RELOAD THE CURRENT (dashboard) URL — not the app root. login() leaves us on
-    // the authenticated dashboard route (e.g. /contacts); navigating back to `/`
-    // would render the logged-out splash and fetch nothing, so the data capture
-    // would see no record list. reload() re-fetches the dashboard's own data.
-    await pageB.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
-    // Wait for the seeded record to re-render — proves the data fetch completed
-    // within the capture window (Clerk re-hydration on reload can delay it).
-    await pageB
-      .getByText(seedMarker, { exact: false })
-      .first()
-      .waitFor({ state: 'visible', timeout: 12_000 })
-      .catch(() => undefined);
-    await pageB.waitForTimeout(1500);
-    await pageB.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
-    bData = await capture.stop();
-    if (!bData) {
-      return naResult('could not observe a data API response from user B\'s dashboard (no JSON record list captured)', start);
-    }
-    // Prefer the seeded marker as the leak identifier; fall back to a field.
-    bIdentifier = bData.body.includes(seedMarker) ? seedMarker : extractIdentifier(bData.body);
-    if (!bIdentifier) {
-      return naResult('captured B\'s data response but could not extract a stable identifier from it', start);
-    }
-  } finally {
-    await ctxB.close().catch(() => undefined);
+  }
+  const seedDiagnostics = {
+    seedAttempts: attempts,
+    seedFormDriven: attempt.formDriven,
+    seedMarkerVisible: attempt.markerVisibleAfterSeed,
+    seedMarkerVisibleAfterReload: attempt.markerVisibleAfterReload,
+    capturedKind: attempt.bData?.kind ?? null,
+  };
+  const bData = attempt.bData;
+  if (!bData) {
+    return naResult('could not observe a data response from user B\'s dashboard (no JSON record list or marker-bearing rendered payload captured)', start, seedDiagnostics);
+  }
+  // Prefer the seeded marker as the leak identifier; fall back to a field.
+  const bIdentifier = bData.body.includes(seedMarker) ? seedMarker : extractIdentifier(bData.body);
+  if (!bIdentifier) {
+    return naResult('captured B\'s data response but could not extract a stable identifier from it', start, seedDiagnostics);
   }
 
   // ── Probe 1: unauthenticated request ──
@@ -175,7 +236,12 @@ export async function runS4(ctx: ScorerContext): Promise<ScorerResult> {
   try {
     await applyCachedSession(ctxA, backend.userA);
     const pageA = await ctxA.newPage();
-    const captureA = captureDataResponses(pageA);
+    // Passing B's identifier as the marker makes the capture prefer any
+    // response that carries it — so a leak anywhere in A's traffic (JSON,
+    // document, or RSC payload) is surfaced rather than masked by whichever
+    // single response happens to be "best". With no leak, the capture falls
+    // back to A's own data response (JSON record list or rendered dashboard).
+    const captureA = captureDataResponses(pageA, { marker: bIdentifier });
     const loginA = await login(pageA, url, backend.userA);
     if (!loginA.ok) {
       results.push({ id: 'cross_user_read', kind: 'cross_user_get', passed: true, status: null, note: `inconclusive: could not sign in as user A (${loginA.reason ?? 'unknown'})` });
@@ -225,6 +291,8 @@ export async function runS4(ctx: ScorerContext): Promise<ScorerResult> {
       crossTenantLeak: results.some((r) => r.identifierLeaked === true),
       discoveredEndpoint: bData.url,
       discoveredMethod: bData.method,
+      discoveredKind: bData.kind,
+      ...seedDiagnostics,
       bRecordCount: bData.recordCount,
       // Never store B's response body — only the redacted per-probe outcome.
       probes: results,
@@ -233,13 +301,13 @@ export async function runS4(ctx: ScorerContext): Promise<ScorerResult> {
   };
 }
 
-function naResult(note: string, start: number): ScorerResult {
+function naResult(note: string, start: number, extra?: Record<string, unknown>): ScorerResult {
   return {
     scorer: 's4',
     version: S4_VERSION,
     passed: null,
     score: null,
-    details: { note, elapsedMs: Date.now() - start },
+    details: { note, ...extra, elapsedMs: Date.now() - start },
     notes: note,
   };
 }
