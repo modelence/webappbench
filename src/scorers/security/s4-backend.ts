@@ -22,7 +22,7 @@ async function replay(
   return { status: res.status(), body: await res.text().catch(() => '') };
 }
 
-export const S4_VERSION = '0.4.0';
+export const S4_VERSION = '0.4.1';
 
 // S4 — Backend security probes. Runtime probes that catch server-side
 // authorization failures (the canonical "RLS off, every user reads every other

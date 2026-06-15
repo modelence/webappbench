@@ -569,7 +569,12 @@ export async function createContact(page: Page, name: string): Promise<boolean> 
     // spaces in "Sample Contact"), which would otherwise trip the field's email
     // validation and block the submit.
     const localPart = name.toLowerCase().replace(/[^a-z0-9._-]+/g, '.').replace(/^\.|\.$/g, '') || 'contact';
-    await fillVerified(emailField.first(), `${localPart}@bench.test`);
+    // Use example.com (RFC 2606), NOT a `.test`/`.invalid` TLD: strict server-side
+    // validators (Python email-validator / Pydantic EmailStr, used by FastAPI
+    // backends like Emergent's) reject reserved/special-use TLDs with a 422, which
+    // silently fails the seed. example.com is reserved for examples yet passes
+    // those validators' deliverability/special-use checks.
+    await fillVerified(emailField.first(), `${localPart}@example.com`);
   }
   // Company (and any other common contact field) — fill if present; some forms
   // require it before the submit button activates.

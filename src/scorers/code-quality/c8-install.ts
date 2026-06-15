@@ -4,7 +4,7 @@ import { basename, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import type { ScorerResult } from '../types.ts';
 
-export const C8_VERSION = '0.3.0';
+export const C8_VERSION = '0.4.0';
 
 // Catches the AI-sitebuilder failure mode where the tool worked around dep
 // conflicts locally with stale node_modules but the committed package.json
@@ -286,19 +286,29 @@ async function attemptInstall(packageDir: string, manager: PackageManager): Prom
 }
 
 async function findInstallTarget(sourceDir: string): Promise<InstallTarget | null> {
-  // Look in source root first, then one directory deep — matches S3's heuristic.
-  const candidates: string[] = [sourceDir];
-  const entries = await readdir(sourceDir, { withFileTypes: true }).catch(() => []);
-  for (const entry of entries) {
-    if (!entry.isDirectory() || SKIP_COPY_DIRS.has(entry.name)) continue;
-    candidates.push(join(sourceDir, entry.name));
-  }
+  // Find the SHALLOWEST package.json, breadth-first. Builders wrap the project
+  // at different depths: most ship it at the source root, Bolt one level deep
+  // (bolt-new-main/), and Emergent two levels deep under a monorepo split
+  // (emergent-<name>-main/frontend/package.json). A bounded BFS that skips
+  // build/vendor dirs locates the install root regardless of wrapper depth.
+  const MAX_DEPTH = 4;
+  let queue: Array<{ dir: string; depth: number }> = [{ dir: sourceDir, depth: 0 }];
 
-  for (const candidate of candidates) {
-    const hasPkg = await fileExists(join(candidate, 'package.json'));
-    if (!hasPkg) continue;
-    const managers = await detectPackageManagers(candidate);
-    return { packageDir: candidate, managers };
+  while (queue.length > 0) {
+    const next: Array<{ dir: string; depth: number }> = [];
+    for (const { dir, depth } of queue) {
+      if (await fileExists(join(dir, 'package.json'))) {
+        const managers = await detectPackageManagers(dir);
+        return { packageDir: dir, managers };
+      }
+      if (depth >= MAX_DEPTH) continue;
+      const entries = await readdir(dir, { withFileTypes: true }).catch(() => []);
+      for (const entry of entries) {
+        if (!entry.isDirectory() || SKIP_COPY_DIRS.has(entry.name) || entry.name.startsWith('.')) continue;
+        next.push({ dir: join(dir, entry.name), depth: depth + 1 });
+      }
+    }
+    queue = next;
   }
 
   return null;
