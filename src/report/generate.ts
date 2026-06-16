@@ -4,6 +4,7 @@ import type { Submission } from '../core/submission.ts';
 import { readPackageVersion } from '../core/version.ts';
 import { computeComposite, scorerWeight, dimensionWeight, ALL_DIMENSION_WEIGHTS, type Dimension } from '../scorers/composite.ts';
 import type { ScorerResult } from '../scorers/types.ts';
+import { buildScorerDetailReport, type ScorerDetailReport } from './failure-detail.ts';
 
 interface RunSummary {
   tool: string;
@@ -15,6 +16,20 @@ interface RunSummary {
   scores: Record<string, ScorerResult>;
   hasSource: boolean;
 }
+
+/**
+ * One scorer's entry in the JSON report. Always carries the summary fields
+ * (scorer/version/passed/score) plus a collapsed `status`. Non-passing scorers
+ * additionally carry an itemized `failures` array and the raw `details`.
+ */
+type ScorerReportEntry = Omit<ScorerResult, 'details'> & {
+  status: ScorerDetailReport['status'];
+  note?: string;
+  passedItems: number;
+  totalItems: number;
+  items: ScorerDetailReport['items'];
+  details?: ScorerResult['details'];
+};
 
 /** Identifies one run for leaderboard filtering; matches submissions.yaml entries. */
 export interface RunKey {
@@ -137,10 +152,25 @@ function serializeRuns(runs: RunSummary[]): string {
     generatedAt: new Date().toISOString(),
     runs: runs.map((r) => {
       const composite = computeComposite(r.scores);
-      const trimmedScores: Record<string, Omit<ScorerResult, 'details'>> = {};
+      // Per-scorer report. Every scorer carries the summary fields
+      // (passed/score/version/status) plus the FULL itemized `items` breakdown —
+      // both passing and failing items — so a scorer that passes e.g. 99/100
+      // still shows exactly which item did not pass. For any scorer that did not
+      // cleanly pass we additionally attach the raw `details` object; clean
+      // passes keep details trimmed to bound file size.
+      const detailedScores: Record<string, ScorerReportEntry> = {};
       for (const [id, result] of Object.entries(r.scores)) {
-        const { details: _details, ...rest } = result;
-        trimmedScores[id] = rest;
+        const { details, ...rest } = result;
+        const report = buildScorerDetailReport(result);
+        detailedScores[id] = {
+          ...rest,
+          status: report.status,
+          ...(report.note ? { note: report.note } : {}),
+          passedItems: report.passedItems,
+          totalItems: report.totalItems,
+          items: report.items,
+          ...(report.status === 'pass' ? {} : { details }),
+        };
       }
       return {
         tool: r.tool,
@@ -160,7 +190,7 @@ function serializeRuns(runs: RunSummary[]): string {
         // because scores.cost.details is trimmed from the JSON output.
         durationMs: genDurationMs(r.scores),
         costUsd: genCostUsd(r.scores),
-        scores: trimmedScores,
+        scores: detailedScores,
       };
     }),
   };
