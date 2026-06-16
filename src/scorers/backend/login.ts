@@ -336,14 +336,84 @@ const VERIFICATION_CHALLENGE_RE = /check your email|verification code|enter the 
 
 type LoginState = 'loggedIn' | 'verificationRequired' | 'stillOnLogin';
 
-// Classify the page state after submitting credentials. "No password field" is
-// the proxy for "left the login form", but it's ambiguous: a verification
-// challenge also has no password field. So we check for challenge text first.
+// True while the form's submit is still in flight — the button shows a
+// pending/loading label ("Signing in…", "Loading…", "Please wait") and/or is
+// disabled. Sampling the DOM during this window is what produced false
+// `stillOnLogin` results: the password field is still mounted on the login URL
+// mid-request, even though the credentials were accepted and a redirect is
+// imminent. We must let this state clear before classifying.
+const SUBMIT_PENDING_LABEL_RE = /signing ?in|logging ?in|loading|please wait|authenticating|verifying|submitting|…|\.\.\./i;
+async function submitInFlight(page: Page): Promise<boolean> {
+  const buttons = page.locator('form button, button[type="submit"]');
+  const count = await buttons.count().catch(() => 0);
+  for (let i = 0; i < count; i++) {
+    const btn = buttons.nth(i);
+    const disabled = await btn.isDisabled().catch(() => false);
+    const text = await btn.innerText().catch(() => '');
+    if (disabled || SUBMIT_PENDING_LABEL_RE.test(text)) return true;
+  }
+  return false;
+}
+
+// Classify the page state after submitting credentials.
+//
+// "No password field" is the proxy for "left the login form", but it's
+// ambiguous on two axes: a verification challenge also has no password field
+// (check challenge text first), AND a slow async sign-in keeps the password
+// field mounted on the login URL while the request is in flight (the button
+// reads "Signing in…"). A fixed-delay snapshot taken mid-request misreads that
+// transient state as `stillOnLogin` and aborts the login even though it
+// succeeds — this is exactly what zeroed S4 on the Anything CRM.
+//
+// So we POLL for a terminal state instead of sampling once: success is detected
+// POSITIVELY (the dashboard mounts), and `stillOnLogin` is only concluded once
+// the submit has actually quiesced (button no longer pending/disabled) with the
+// password field still present.
 async function classifyAfterSubmit(page: Page): Promise<LoginState> {
-  await page.waitForTimeout(1500);
-  await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
-  const bodyText = await page.locator('body').innerText().catch(() => '');
-  if (VERIFICATION_CHALLENGE_RE.test(bodyText)) return 'verificationRequired';
+  const deadline = Date.now() + 20_000;
+  let sawPending = false;
+  while (Date.now() < deadline) {
+    await page.waitForLoadState('networkidle', { timeout: 4_000 }).catch(() => undefined);
+
+    // Positive success signal — the authenticated dashboard mounted.
+    if (await isOnDashboard(page)) return 'loggedIn';
+
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+    if (VERIFICATION_CHALLENGE_RE.test(bodyText)) return 'verificationRequired';
+
+    const stillHasPassword = await page
+      .locator('input[type="password"]')
+      .count()
+      .then((c) => c > 0)
+      .catch(() => true);
+
+    // Left the form without a challenge and without a recognizable dashboard
+    // (e.g. an app whose post-login UI we don't positively match) — still a
+    // successful login: the password field is gone.
+    if (!stillHasPassword) return 'loggedIn';
+
+    // Password field still present. If the submit is mid-flight (button shows a
+    // loading label or is disabled), this is a transient state — wait it out
+    // rather than declaring failure. Only once the submit has settled AND the
+    // form is still showing do we conclude we never left the login screen.
+    if (await submitInFlight(page)) {
+      sawPending = true;
+      await page.waitForTimeout(500);
+      continue;
+    }
+    // The submit has settled (or never showed a pending state). Give one more
+    // brief grace period after observing a pending->settled transition, since a
+    // redirect can fire a beat after the button re-enables.
+    if (sawPending) {
+      sawPending = false;
+      await page.waitForTimeout(800);
+      continue;
+    }
+    return 'stillOnLogin';
+  }
+  // Timed out without reaching a terminal state. Make a final positive check;
+  // otherwise report still-on-login (the password form never gave way).
+  if (await isOnDashboard(page)) return 'loggedIn';
   const stillHasPassword = await page
     .locator('input[type="password"]')
     .count()
@@ -587,7 +657,16 @@ export async function createContact(page: Page, name: string): Promise<boolean> 
   // value, fall back to typing it key-by-key (which fires React onChange).
   await fillVerified(nameField.first(), name);
 
-  const emailField = page.getByLabel(/email/i).or(page.getByPlaceholder(/email/i));
+  // Email field. `input[type="email"]` is the most reliable signal and is tried
+  // FIRST — many forms have no <label>/name/id, only placeholders, and a
+  // placeholder regex is treacherous: a common example email placeholder like
+  // "jane@company.com" contains the substring "company", so a /company/ locator
+  // would grab the email field (and a /email/ locator would miss it, since the
+  // placeholder has no "email"). Anchoring on the input TYPE avoids both traps.
+  const emailField = page
+    .locator('input[type="email"]')
+    .or(page.getByLabel(/e-?mail/i))
+    .or(page.getByPlaceholder(/e-?mail/i));
   if (await emailField.count().then((c) => c > 0).catch(() => false)) {
     // Derive a valid email local-part — strip anything that isn't allowed (e.g.
     // spaces in "Sample Contact"), which would otherwise trip the field's email
@@ -601,10 +680,34 @@ export async function createContact(page: Page, name: string): Promise<boolean> 
     await fillVerified(emailField.first(), `${localPart}@example.com`);
   }
   // Company (and any other common contact field) — fill if present; some forms
-  // require it before the submit button activates.
-  const companyField = page.getByLabel(/company|organization|organisation/i).or(page.getByPlaceholder(/company|organization/i));
-  if (await companyField.count().then((c) => c > 0).catch(() => false)) {
-    await fillVerified(companyField.first(), 'BenchCo');
+  // require it before the submit button activates. Match by label/placeholder
+  // but EXCLUDE the email input we already filled: an email placeholder such as
+  // "jane@company.com" matches /company/, which would otherwise re-target the
+  // email field here and leave the real company field empty (silently failing
+  // the form's required-field validation, so no record is created).
+  const companyField = page
+    .getByLabel(/company|organization|organisation/i)
+    .or(page.getByPlaceholder(/company|organization|organisation|acme/i));
+  // Resolve the company target, skipping the email input if the loose locator
+  // (e.g. an "jane@company.com" email placeholder) still resolves to it.
+  let companyTarget: import('@playwright/test').Locator | null = null;
+  const companyCount = await companyField.count().catch(() => 0);
+  for (let i = 0; i < companyCount; i++) {
+    const cand = companyField.nth(i);
+    const type = await cand.getAttribute('type').catch(() => null);
+    if (type === 'email') continue;
+    companyTarget = cand;
+    break;
+  }
+  // Fallback: if keyword matching found nothing usable, take the last non-email
+  // text input in the form (company is conventionally the last field).
+  if (!companyTarget) {
+    const textInputs = page.locator('form input:not([type="email"]):not([type="password"]):not([type="hidden"])');
+    const n = await textInputs.count().catch(() => 0);
+    if (n >= 3) companyTarget = textInputs.nth(n - 1);
+  }
+  if (companyTarget) {
+    await fillVerified(companyTarget, 'BenchCo');
   }
 
   // Prefer the form's real submit control. A bare name regex is ambiguous when
