@@ -21,7 +21,9 @@
     "https://app.emergent.sh/*",
     "https://*.emergent.sh/*",
     "https://manus.im/*",
-    "https://*.manus.im/*"
+    "https://*.manus.im/*",
+    "https://anything.com/*",
+    "https://*.anything.com/*"
   ],
   "icons": {
     "16": "icons/icon-16.png",
@@ -112,6 +114,17 @@
     {
       "matches": ["https://manus.im/*", "https://*.manus.im/*"],
       "js": ["src/content/manus-main.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://anything.com/*", "https://*.anything.com/*"],
+      "js": ["src/content/anything.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://anything.com/*", "https://*.anything.com/*"],
+      "js": ["src/content/anything-main.js"],
       "world": "MAIN",
       "run_at": "document_start"
     }
