@@ -70,6 +70,7 @@ export async function runS3(sourceDir: string): Promise<ScorerResult> {
   let generatedLockfile = false;
   let usedLegacyPeerDeps = false;
   let strippedProtocolDeps: string[] = [];
+  let removedDevDeps = 0;
 
   if (!hasPackageLock) {
     const pkgText = await readFile(pkgPath, 'utf8').catch(() => '{}');
@@ -98,6 +99,7 @@ export async function runS3(sourceDir: string): Promise<ScorerResult> {
     generatedLockfile = true;
     usedLegacyPeerDeps = prepared.usedLegacyPeerDeps;
     strippedProtocolDeps = prepared.strippedProtocolDeps;
+    removedDevDeps = prepared.removedDevDeps;
   }
 
   let raw: string | null;
@@ -175,6 +177,7 @@ export async function runS3(sourceDir: string): Promise<ScorerResult> {
       generatedLockfile,
       ...(usedLegacyPeerDeps ? { usedLegacyPeerDeps: true } : {}),
       ...(strippedProtocolDeps.length ? { strippedProtocolDeps } : {}),
+      ...(generatedLockfile ? { auditedProdDepsOnly: true, removedDevDeps } : {}),
       topVulnerabilities: vulns
         .sort((a, b) => severityRank(b.severity) - severityRank(a.severity))
         .slice(0, 5),
@@ -184,7 +187,7 @@ export async function runS3(sourceDir: string): Promise<ScorerResult> {
 }
 
 async function prepareGeneratedLockfileAuditDir(auditDir: string): Promise<
-  | { ok: true; auditDir: string; tempRoot: string; usedLegacyPeerDeps: boolean; strippedProtocolDeps: string[] }
+  | { ok: true; auditDir: string; tempRoot: string; usedLegacyPeerDeps: boolean; strippedProtocolDeps: string[]; removedDevDeps: number }
   | { ok: false; error: string }
 > {
   const tempRoot = await mkdtemp(join(tmpdir(), 'benchmark-s3-'));
@@ -196,22 +199,32 @@ async function prepareGeneratedLockfileAuditDir(auditDir: string): Promise<
       filter: (src) => !shouldSkipDir(basename(src)),
     });
 
-    // npm can't resolve Yarn-Berry-only dependency protocols (patch:, workspace:,
-    // portal:, link:). A single such entry aborts the whole `npm install
-    // --package-lock-only` with EUNSUPPORTEDPROTOCOL, so no lockfile is built and
-    // s3 goes N/A even though the rest of the tree is auditable. Rewrite the temp
-    // package.json to drop those entries. This loses no audit signal: patch:
-    // overlays a LOCAL .patch (not in any CVE DB) on top of a normal npm
-    // package — the underlying name@version is still resolved and audited;
-    // workspace:/portal:/link: point at LOCAL packages that have no published
-    // version and no CVEs. We strip in the temp copy only — the submission's real
-    // files are untouched.
-    const strippedProtocolDeps = await stripYarnOnlyProtocols(join(tempAuditDir, 'package.json'));
+    // Rewrite the temp package.json before generating the lockfile:
+    //
+    //  (a) Drop Yarn-Berry-only dependency protocols (patch:, workspace:,
+    //      portal:, link:). npm can't resolve these — a single such entry aborts
+    //      the whole `npm install --package-lock-only` with EUNSUPPORTEDPROTOCOL,
+    //      so no lockfile is built and s3 goes N/A. Stripping loses no audit
+    //      signal: patch: overlays a LOCAL .patch (not in any CVE DB) on a normal
+    //      npm package — the underlying name@version is still resolved and
+    //      audited; workspace:/portal:/link: point at LOCAL packages with no
+    //      published version and no CVEs.
+    //
+    //  (b) Drop devDependencies entirely. s3 scores the DEPLOYED app's exposure,
+    //      so it audits prod deps only (--omit=dev). But a `--package-lock-only`
+    //      lockfile marks dev/dev-optional packages `devOptional`, which
+    //      `npm audit --omit=dev` does NOT exclude — so dev-only test tooling
+    //      (vitest → vite → esbuild, etc.) leaks into the report and tanks the
+    //      score for CVEs that never ship. Removing devDependencies up front makes
+    //      the generated lockfile an unambiguous production tree.
+    //
+    // We rewrite the temp copy only — the submission's real files are untouched.
+    const { strippedProtocolDeps, removedDevDeps } = await rewritePackageForLockGen(join(tempAuditDir, 'package.json'));
 
     const baseArgs = ['install', '--package-lock-only', '--ignore-scripts', '--omit=dev', '--no-audit', '--fund=false'];
     const install = await runCommand('npm', baseArgs, tempAuditDir, 120_000);
     if (install.code === 0 && !install.timedOut) {
-      return { ok: true, auditDir: tempAuditDir, tempRoot, usedLegacyPeerDeps: false, strippedProtocolDeps };
+      return { ok: true, auditDir: tempAuditDir, tempRoot, usedLegacyPeerDeps: false, strippedProtocolDeps, removedDevDeps };
     }
 
     // A peer-dependency conflict (ERESOLVE) is a defect in the project's
@@ -224,7 +237,7 @@ async function prepareGeneratedLockfileAuditDir(auditDir: string): Promise<
     if (!install.timedOut && isPeerConflict(install)) {
       const retry = await runCommand('npm', [...baseArgs, '--legacy-peer-deps'], tempAuditDir, 120_000);
       if (retry.code === 0 && !retry.timedOut) {
-        return { ok: true, auditDir: tempAuditDir, tempRoot, usedLegacyPeerDeps: true, strippedProtocolDeps };
+        return { ok: true, auditDir: tempAuditDir, tempRoot, usedLegacyPeerDeps: true, strippedProtocolDeps, removedDevDeps };
       }
       await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
       return { ok: false, error: summarizeCommandFailure(retry) };
@@ -242,20 +255,22 @@ async function prepareGeneratedLockfileAuditDir(auditDir: string): Promise<
 // any of these aborts `npm install --package-lock-only` with EUNSUPPORTEDPROTOCOL.
 const YARN_ONLY_PROTOCOL_RE = /^(patch|workspace|portal|link|exec):/i;
 
-// Rewrite a package.json in place, removing dependency entries whose version
-// spec uses a Yarn-only protocol from dependencies / devDependencies /
-// optionalDependencies / peerDependencies / resolutions / overrides. Returns the
-// "<field>.<name>" keys that were dropped (for reporting). No-op (returns []) if
-// the file is missing/unparseable or has no such entries — so a normal npm
-// project is unaffected.
-async function stripYarnOnlyProtocols(pkgPath: string): Promise<string[]> {
+// Rewrite a package.json in place to prepare it for prod-only lockfile
+// generation: (a) drop dependency entries whose version spec uses a Yarn-only
+// protocol (npm can't resolve them), and (b) remove devDependencies entirely so
+// the generated lockfile is an unambiguous production tree. Returns the dropped
+// protocol keys ("<field>.<name>") and the count of devDependencies removed. No
+// rewrite happens (returns empty/0) if the file is missing/unparseable.
+async function rewritePackageForLockGen(
+  pkgPath: string,
+): Promise<{ strippedProtocolDeps: string[]; removedDevDeps: number }> {
   const text = await readFile(pkgPath, 'utf8').catch(() => null);
-  if (text === null) return [];
+  if (text === null) return { strippedProtocolDeps: [], removedDevDeps: 0 };
   let pkg: Record<string, unknown>;
   try {
     pkg = JSON.parse(text) as Record<string, unknown>;
   } catch {
-    return [];
+    return { strippedProtocolDeps: [], removedDevDeps: 0 };
   }
 
   const depFields = [
@@ -266,7 +281,7 @@ async function stripYarnOnlyProtocols(pkgPath: string): Promise<string[]> {
     'resolutions',
     'overrides',
   ];
-  const stripped: string[] = [];
+  const strippedProtocolDeps: string[] = [];
   let changed = false;
 
   for (const field of depFields) {
@@ -276,16 +291,26 @@ async function stripYarnOnlyProtocols(pkgPath: string): Promise<string[]> {
     for (const [name, spec] of Object.entries(map)) {
       if (typeof spec === 'string' && YARN_ONLY_PROTOCOL_RE.test(spec)) {
         delete map[name];
-        stripped.push(`${field}.${name}`);
+        strippedProtocolDeps.push(`${field}.${name}`);
         changed = true;
       }
     }
   }
 
+  // Remove devDependencies so the audit can't be polluted by dev-only tooling
+  // that npm's --package-lock-only marks `devOptional` (which `npm audit
+  // --omit=dev` fails to exclude).
+  const devBlock = pkg['devDependencies'];
+  const removedDevDeps = devBlock && typeof devBlock === 'object' ? Object.keys(devBlock).length : 0;
+  if (removedDevDeps > 0) {
+    delete pkg['devDependencies'];
+    changed = true;
+  }
+
   if (changed) {
     await writeFile(pkgPath, JSON.stringify(pkg, null, 2)).catch(() => undefined);
   }
-  return stripped;
+  return { strippedProtocolDeps, removedDevDeps };
 }
 
 // npm 7+ rejects unsatisfiable peer dependencies with ERESOLVE and tells you to
