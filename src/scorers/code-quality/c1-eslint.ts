@@ -1,10 +1,10 @@
 import { readdir, readFile } from 'node:fs/promises';
-import { extname, join } from 'node:path';
+import { extname, join, relative } from 'node:path';
 import { ESLint } from 'eslint';
 import tseslint from 'typescript-eslint';
 import type { ScorerResult } from '../types.ts';
 
-export const C1_VERSION = '0.2.0';
+export const C1_VERSION = '0.2.1';
 
 const LINT_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.mjs']);
 // Dot-directories (.local, .replit, .config, ...) are platform/tooling
@@ -52,7 +52,11 @@ export async function runC1(sourceDir: string): Promise<ScorerResult> {
     totalErrors += errors;
     totalWarnings += warnings;
     if (errors + warnings > 0) {
-      topOffenders.push({ file: r.filePath.slice(sourceDir.length + 1), errors, warnings });
+      // ESLint returns absolute filePaths; sourceDir may be relative or absolute.
+      // `relative` normalizes both to a clean source-relative path (the old
+      // `.slice(sourceDir.length + 1)` chopped mid-string when sourceDir was
+      // relative but filePath absolute, leaving mangled prefixes like "hmark/…").
+      topOffenders.push({ file: relative(sourceDir, r.filePath), errors, warnings });
     }
   }
   // LOC: count non-empty lines across all source files
