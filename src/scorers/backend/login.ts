@@ -97,7 +97,11 @@ async function settleOnDashboard(page: Page, url: string): Promise<void> {
   // mistaken for "logged in".
   const on404 = async (): Promise<boolean> => {
     const body = await page.locator('body').innerText().catch(() => '');
-    return /404|page not found|not found|forgot to add the page/i.test(body);
+    // Cover the common soft-404 phrasings sitebuilders ship. Anything renders
+    // "Uh-oh! This page doesn't exist (yet). Looks like "/x" isn't part of your
+    // project" — which matches none of the classic "not found" strings, so a
+    // narrow pattern would mistake it for a real page and strand login there.
+    return /404|page not found|not found|forgot to add the page|doesn'?t exist|does not exist|isn'?t part of your|page you('?re| are) looking for/i.test(body);
   };
   // Wait for either the dashboard to appear (success) or a definitive 404. Up to
   // ~`rounds` seconds. Returns true if the dashboard was reached.
@@ -127,9 +131,11 @@ async function settleOnDashboard(page: Page, url: string): Promise<void> {
       await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
       if (await waitForDashboard(6)) return;
     }
-    // 3) Still stuck — navigate to the app root explicitly, then common dashboard
+    // 3) Still stuck — navigate to the app ROOT first (many apps, e.g. Anything,
+    //    render the dashboard at `/` itself), then fall back to common dashboard
     //    routes. ONLY accept one that actually renders the dashboard; a 404 is
-    //    rejected (we never screenshot a guessed route that doesn't exist).
+    //    rejected (we never screenshot, or strand login on, a guessed route that
+    //    doesn't exist — Anything serves a soft-404 at /contacts, /dashboard, …).
     const origin = (() => {
       try {
         return new URL(url).origin;
@@ -137,15 +143,17 @@ async function settleOnDashboard(page: Page, url: string): Promise<void> {
         return url.replace(/\/+$/, '');
       }
     })();
-    for (const path of ['/contacts', '/dashboard', '/app', '/home']) {
+    for (const path of ['/', '/contacts', '/dashboard', '/app', '/home']) {
       await page.goto(`${origin}${path}`, { waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => undefined);
       await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
       if (await waitForDashboard(3)) return;
     }
     // 4) Nothing rendered the dashboard. Return to root so we DON'T leave the
-    //    page sitting on a 404 page that a caller would then screenshot.
+    //    page sitting on a 404 page that a caller would then screenshot — and
+    //    give the root one more chance to mount the dashboard before giving up.
     await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => undefined);
     await page.waitForLoadState('networkidle', { timeout: 5_000 }).catch(() => undefined);
+    await waitForDashboard(5);
   } catch {
     // best-effort — login already succeeded; downstream steps will surface any
     // dashboard-not-found condition with their own diagnostics.
@@ -369,9 +377,11 @@ async function submitInFlight(page: Page): Promise<boolean> {
 // POSITIVELY (the dashboard mounts), and `stillOnLogin` is only concluded once
 // the submit has actually quiesced (button no longer pending/disabled) with the
 // password field still present.
-async function classifyAfterSubmit(page: Page): Promise<LoginState> {
+async function classifyAfterSubmit(page: Page, url?: string): Promise<LoginState> {
   const deadline = Date.now() + 20_000;
   let sawPending = false;
+  let pendingSince = 0;
+  let recoveredByReload = false;
   while (Date.now() < deadline) {
     await page.waitForLoadState('networkidle', { timeout: 4_000 }).catch(() => undefined);
 
@@ -398,6 +408,23 @@ async function classifyAfterSubmit(page: Page): Promise<LoginState> {
     // form is still showing do we conclude we never left the login screen.
     if (await submitInFlight(page)) {
       sawPending = true;
+      if (pendingSince === 0) pendingSince = Date.now();
+      // Some apps (Anything CRM) intermittently WEDGE the submit button on
+      // "Signing in…" forever even though the auth request already set the
+      // session cookie server-side — the client just never re-renders. A hard
+      // reload re-reads the cookie and mounts the dashboard (the exact manual
+      // recovery). Do this ONCE, only after the button has been pending a while,
+      // so we don't disturb a normal in-flight submit that's about to resolve.
+      if (!recoveredByReload && url && Date.now() - pendingSince > 6_000) {
+        recoveredByReload = true;
+        await page.reload({ waitUntil: 'domcontentloaded', timeout: 20_000 }).catch(() => undefined);
+        await page.waitForLoadState('networkidle', { timeout: 6_000 }).catch(() => undefined);
+        if (await isOnDashboard(page)) return 'loggedIn';
+        // After the reload the password field may be back (logged-out) or gone
+        // (logged-in but unrecognized UI) — let the loop re-classify.
+        pendingSince = 0;
+        continue;
+      }
       await page.waitForTimeout(500);
       continue;
     }
@@ -579,7 +606,7 @@ export async function login(page: Page, url: string, account: Account): Promise<
       return { ok: false, reason: 'could not locate the password field on the login screen' };
     }
     await submit(page);
-    let state = await classifyAfterSubmit(page);
+    let state = await classifyAfterSubmit(page, url);
     // Email/SMS OTP challenge: in interactive runs, ask the operator to read the
     // code from the inbox and type it in, then re-evaluate. No-op (stays
     // 'verificationRequired') in non-interactive runs.
