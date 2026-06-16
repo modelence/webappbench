@@ -339,12 +339,19 @@ async function findAuditDir(sourceDir: string): Promise<string> {
   );
 
   // Candidates that look like a real app (meaningful dependency count and not a
-  // pure workspace shell). Among those, prefer one with a lockfile, then the one
-  // with the most dependencies (the primary app), then the shallowest.
+  // pure workspace shell). The submission is a deployed WEB preview, so among
+  // app packages we must prefer the web app (Next/Vite/CRA) over a sibling
+  // mobile app (React Native / Expo) — a monorepo's mobile package often has far
+  // MORE deps, so a naive "most deps wins" picks it and audits an irrelevant
+  // (and noisier) dependency tree. Sort: web app first, then mobile last, then
+  // lockfile, then most deps, then shallowest.
   const realApps = profiles.filter((p) => !p.isWorkspaceShell && p.depCount >= APP_DEP_THRESHOLD);
   if (realApps.length > 0) {
     realApps.sort((a, b) =>
-      Number(b.hasLock) - Number(a.hasLock) || b.depCount - a.depCount,
+      Number(b.isWebApp) - Number(a.isWebApp) ||
+      Number(a.isMobileApp) - Number(b.isMobileApp) ||
+      Number(b.hasLock) - Number(a.hasLock) ||
+      b.depCount - a.depCount,
     );
     return realApps[0]!.dir;
   }
@@ -362,24 +369,43 @@ async function findAuditDir(sourceDir: string): Promise<string> {
 // (vs. a workspace shell whose only deps are a handful of lint/build tools).
 const APP_DEP_THRESHOLD = 5;
 
+// Web-app frameworks: presence of any of these (as a dep) or a matching build
+// script marks a package as the deployed web app worth auditing for a web
+// submission.
+const WEB_FRAMEWORK_DEPS = new Set(['next', 'vite', 'react-scripts', '@remix-run/react', 'gatsby', '@angular/core', 'vue', 'nuxt', 'astro']);
+const WEB_BUILD_SCRIPT_RE = /\b(next|vite|react-scripts|remix|gatsby|ng|nuxt|astro)\b.*\bbuild\b|\bbuild\b.*\b(next|vite|gatsby|astro)\b|next (build|dev|start)/i;
+// Mobile (React Native / Expo) markers — a package we want to DEPRIORITIZE for a
+// web submission.
+const MOBILE_DEPS = new Set(['expo', 'react-native', '@expo/cli', 'expo-router']);
+
 // Read a package.json and summarize what kind of package it is.
-async function profilePackageDir(dir: string): Promise<{ depCount: number; isWorkspaceShell: boolean }> {
+async function profilePackageDir(dir: string): Promise<{ depCount: number; isWorkspaceShell: boolean; isWebApp: boolean; isMobileApp: boolean }> {
   const text = await readFile(join(dir, 'package.json'), 'utf8').catch(() => null);
-  if (text === null) return { depCount: 0, isWorkspaceShell: false };
+  if (text === null) return { depCount: 0, isWorkspaceShell: false, isWebApp: false, isMobileApp: false };
   try {
     const pkg = JSON.parse(text) as {
-      dependencies?: object;
-      devDependencies?: object;
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+      scripts?: Record<string, string>;
       workspaces?: unknown;
     };
-    const runtimeDeps = Object.keys(pkg.dependencies ?? {}).length;
-    const allDeps = runtimeDeps + Object.keys(pkg.devDependencies ?? {}).length;
+    const deps = pkg.dependencies ?? {};
+    const devDeps = pkg.devDependencies ?? {};
+    const runtimeDeps = Object.keys(deps).length;
+    const allDeps = runtimeDeps + Object.keys(devDeps).length;
     // A workspace shell declares `workspaces` and has no runtime dependencies of
     // its own (only build/lint devDeps, or none) — the real deps live in members.
     const isWorkspaceShell = pkg.workspaces != null && runtimeDeps === 0;
-    return { depCount: allDeps, isWorkspaceShell };
+
+    const allDepNames = new Set([...Object.keys(deps), ...Object.keys(devDeps)]);
+    const scriptValues = Object.values(pkg.scripts ?? {}).join(' ; ');
+    const isWebApp =
+      [...WEB_FRAMEWORK_DEPS].some((d) => allDepNames.has(d)) || WEB_BUILD_SCRIPT_RE.test(scriptValues);
+    const isMobileApp = [...MOBILE_DEPS].some((d) => allDepNames.has(d));
+
+    return { depCount: allDeps, isWorkspaceShell, isWebApp, isMobileApp };
   } catch {
-    return { depCount: 0, isWorkspaceShell: false };
+    return { depCount: 0, isWorkspaceShell: false, isWebApp: false, isMobileApp: false };
   }
 }
 
