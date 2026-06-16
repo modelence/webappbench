@@ -109,6 +109,14 @@ async function seedAndCaptureAsB(
     if (!loginB.ok) {
       return { loginOk: false, loginReason: loginB.reason, formDriven: false, markerVisibleAfterSeed: false, markerVisibleAfterReload: false, bData: null };
     }
+    // Attach the capture BEFORE seeding. Many apps fetch the fresh record list
+    // right after a successful create (a `GET /api/contacts` refetch fired by
+    // the form's onSuccess) — that response carries the seeded marker AND is
+    // clean JSON, the ideal capture. If we only start capturing after the seed
+    // (or only on a later reload), we miss this post-create fetch entirely and
+    // fall back to capturing the rendered HTML document, which yields no stable
+    // identifier. So capture across the whole seed+reload window.
+    const capture = captureDataResponses(pageB, { marker: seedMarker });
     // Seed a marked record as B, then confirm it actually rendered on the
     // dashboard before probing — if the seed silently failed (wrong page), the
     // data fetch would carry no records and the capture would come up empty.
@@ -119,16 +127,15 @@ async function seedAndCaptureAsB(
       .waitFor({ state: 'visible', timeout: 8_000 })
       .then(() => true)
       .catch(() => false);
-    // The marker lets the capture match server-rendered payloads (HTML / RSC)
-    // in addition to JSON record lists — RSC apps have no JSON data traffic.
-    const capture = captureDataResponses(pageB, { marker: seedMarker });
     // RELOAD THE CURRENT (dashboard) URL — not the app root. login() leaves us on
     // the authenticated dashboard route (e.g. /contacts); navigating back to `/`
     // would render the logged-out splash and fetch nothing, so the data capture
-    // would see no record list. reload() re-fetches the dashboard's own data.
+    // would see no record list. reload() re-fetches the dashboard's own data —
+    // a second chance to capture the JSON list for apps that DON'T refetch on
+    // create (and whose list only renders the new record after a reload).
     await pageB.reload({ waitUntil: 'domcontentloaded', timeout: 30_000 }).catch(() => undefined);
     // Wait for the seeded record to re-render — proves the data fetch completed
-    // within the capture window (Clerk re-hydration on reload can delay it).
+    // within the capture window (re-hydration on reload can delay it).
     const markerVisibleAfterReload = await pageB
       .getByText(seedMarker, { exact: false })
       .first()

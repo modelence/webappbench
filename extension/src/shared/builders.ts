@@ -7,6 +7,7 @@ import { parseV0Conversation } from './v0-parse.js';
 import { parseBoltConversation } from './bolt-parse.js';
 import { parseEmergentConversation } from './emergent-parse.js';
 import { parseManusConversation } from './manus-parse.js';
+import { parseAnythingConversation } from './anything-parse.js';
 
 export const BUILDERS: readonly BuilderDef[] = [
   {
@@ -109,6 +110,23 @@ export const BUILDERS: readonly BuilderDef[] = [
     // "Credits used" in the usage panel, so cost = credits × $0.01.
     creditToUsd: 0.01,
     creditRateNote: 'Monthly billing: ~$0.01/credit (e.g. $19 / 1,900). Credits = the build\'s "Credits used".',
+  },
+  {
+    id: 'anything',
+    label: 'Anything',
+    hosts: ['anything.com'],
+    contentScripts: [
+      { file: 'src/content/anything.js', world: 'ISOLATED' },
+      { file: 'src/content/anything-main.js', world: 'MAIN' },
+    ],
+    parser: parseAnythingConversation,
+    // Anything prices credits at $0.0012 each ($24 / 20,000 on Pro). The
+    // revision's totalCredits is the build's credit charge (raw units that the
+    // UI divides by 10,000,000 to show the credit label); the parser normalizes
+    // it to that displayed count, so cost = displayed credits × $0.0012.
+    creditToUsd: 0.0012,
+    creditRateNote:
+      'Monthly billing: $0.0012/credit ($24 / 20,000 on Pro). Credits = the message\'s totalCredits ÷ 10,000,000 (the build\'s credit label).',
   },
 ];
 

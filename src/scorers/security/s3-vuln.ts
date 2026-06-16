@@ -1,4 +1,4 @@
-import { access, cp, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { access, cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, join, relative } from 'node:path';
 import { spawn } from 'node:child_process';
@@ -69,6 +69,8 @@ export async function runS3(sourceDir: string): Promise<ScorerResult> {
   let tempAuditRoot: string | null = null;
   let generatedLockfile = false;
   let usedLegacyPeerDeps = false;
+  let strippedProtocolDeps: string[] = [];
+  let removedDevDeps = 0;
 
   if (!hasPackageLock) {
     const pkgText = await readFile(pkgPath, 'utf8').catch(() => '{}');
@@ -96,6 +98,8 @@ export async function runS3(sourceDir: string): Promise<ScorerResult> {
     tempAuditRoot = prepared.tempRoot;
     generatedLockfile = true;
     usedLegacyPeerDeps = prepared.usedLegacyPeerDeps;
+    strippedProtocolDeps = prepared.strippedProtocolDeps;
+    removedDevDeps = prepared.removedDevDeps;
   }
 
   let raw: string | null;
@@ -172,6 +176,8 @@ export async function runS3(sourceDir: string): Promise<ScorerResult> {
       auditDir: relative(sourceDir, auditDir) || '.',
       generatedLockfile,
       ...(usedLegacyPeerDeps ? { usedLegacyPeerDeps: true } : {}),
+      ...(strippedProtocolDeps.length ? { strippedProtocolDeps } : {}),
+      ...(generatedLockfile ? { auditedProdDepsOnly: true, removedDevDeps } : {}),
       topVulnerabilities: vulns
         .sort((a, b) => severityRank(b.severity) - severityRank(a.severity))
         .slice(0, 5),
@@ -181,7 +187,7 @@ export async function runS3(sourceDir: string): Promise<ScorerResult> {
 }
 
 async function prepareGeneratedLockfileAuditDir(auditDir: string): Promise<
-  | { ok: true; auditDir: string; tempRoot: string; usedLegacyPeerDeps: boolean }
+  | { ok: true; auditDir: string; tempRoot: string; usedLegacyPeerDeps: boolean; strippedProtocolDeps: string[]; removedDevDeps: number }
   | { ok: false; error: string }
 > {
   const tempRoot = await mkdtemp(join(tmpdir(), 'benchmark-s3-'));
@@ -193,10 +199,32 @@ async function prepareGeneratedLockfileAuditDir(auditDir: string): Promise<
       filter: (src) => !shouldSkipDir(basename(src)),
     });
 
+    // Rewrite the temp package.json before generating the lockfile:
+    //
+    //  (a) Drop Yarn-Berry-only dependency protocols (patch:, workspace:,
+    //      portal:, link:). npm can't resolve these — a single such entry aborts
+    //      the whole `npm install --package-lock-only` with EUNSUPPORTEDPROTOCOL,
+    //      so no lockfile is built and s3 goes N/A. Stripping loses no audit
+    //      signal: patch: overlays a LOCAL .patch (not in any CVE DB) on a normal
+    //      npm package — the underlying name@version is still resolved and
+    //      audited; workspace:/portal:/link: point at LOCAL packages with no
+    //      published version and no CVEs.
+    //
+    //  (b) Drop devDependencies entirely. s3 scores the DEPLOYED app's exposure,
+    //      so it audits prod deps only (--omit=dev). But a `--package-lock-only`
+    //      lockfile marks dev/dev-optional packages `devOptional`, which
+    //      `npm audit --omit=dev` does NOT exclude — so dev-only test tooling
+    //      (vitest → vite → esbuild, etc.) leaks into the report and tanks the
+    //      score for CVEs that never ship. Removing devDependencies up front makes
+    //      the generated lockfile an unambiguous production tree.
+    //
+    // We rewrite the temp copy only — the submission's real files are untouched.
+    const { strippedProtocolDeps, removedDevDeps } = await rewritePackageForLockGen(join(tempAuditDir, 'package.json'));
+
     const baseArgs = ['install', '--package-lock-only', '--ignore-scripts', '--omit=dev', '--no-audit', '--fund=false'];
     const install = await runCommand('npm', baseArgs, tempAuditDir, 120_000);
     if (install.code === 0 && !install.timedOut) {
-      return { ok: true, auditDir: tempAuditDir, tempRoot, usedLegacyPeerDeps: false };
+      return { ok: true, auditDir: tempAuditDir, tempRoot, usedLegacyPeerDeps: false, strippedProtocolDeps, removedDevDeps };
     }
 
     // A peer-dependency conflict (ERESOLVE) is a defect in the project's
@@ -209,7 +237,7 @@ async function prepareGeneratedLockfileAuditDir(auditDir: string): Promise<
     if (!install.timedOut && isPeerConflict(install)) {
       const retry = await runCommand('npm', [...baseArgs, '--legacy-peer-deps'], tempAuditDir, 120_000);
       if (retry.code === 0 && !retry.timedOut) {
-        return { ok: true, auditDir: tempAuditDir, tempRoot, usedLegacyPeerDeps: true };
+        return { ok: true, auditDir: tempAuditDir, tempRoot, usedLegacyPeerDeps: true, strippedProtocolDeps, removedDevDeps };
       }
       await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
       return { ok: false, error: summarizeCommandFailure(retry) };
@@ -221,6 +249,68 @@ async function prepareGeneratedLockfileAuditDir(auditDir: string): Promise<
     await rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
     return { ok: false, error: error instanceof Error ? error.message : String(error) };
   }
+}
+
+// Yarn-Berry-only dependency protocols npm cannot resolve. A version spec using
+// any of these aborts `npm install --package-lock-only` with EUNSUPPORTEDPROTOCOL.
+const YARN_ONLY_PROTOCOL_RE = /^(patch|workspace|portal|link|exec):/i;
+
+// Rewrite a package.json in place to prepare it for prod-only lockfile
+// generation: (a) drop dependency entries whose version spec uses a Yarn-only
+// protocol (npm can't resolve them), and (b) remove devDependencies entirely so
+// the generated lockfile is an unambiguous production tree. Returns the dropped
+// protocol keys ("<field>.<name>") and the count of devDependencies removed. No
+// rewrite happens (returns empty/0) if the file is missing/unparseable.
+async function rewritePackageForLockGen(
+  pkgPath: string,
+): Promise<{ strippedProtocolDeps: string[]; removedDevDeps: number }> {
+  const text = await readFile(pkgPath, 'utf8').catch(() => null);
+  if (text === null) return { strippedProtocolDeps: [], removedDevDeps: 0 };
+  let pkg: Record<string, unknown>;
+  try {
+    pkg = JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return { strippedProtocolDeps: [], removedDevDeps: 0 };
+  }
+
+  const depFields = [
+    'dependencies',
+    'devDependencies',
+    'optionalDependencies',
+    'peerDependencies',
+    'resolutions',
+    'overrides',
+  ];
+  const strippedProtocolDeps: string[] = [];
+  let changed = false;
+
+  for (const field of depFields) {
+    const block = pkg[field];
+    if (!block || typeof block !== 'object') continue;
+    const map = block as Record<string, unknown>;
+    for (const [name, spec] of Object.entries(map)) {
+      if (typeof spec === 'string' && YARN_ONLY_PROTOCOL_RE.test(spec)) {
+        delete map[name];
+        strippedProtocolDeps.push(`${field}.${name}`);
+        changed = true;
+      }
+    }
+  }
+
+  // Remove devDependencies so the audit can't be polluted by dev-only tooling
+  // that npm's --package-lock-only marks `devOptional` (which `npm audit
+  // --omit=dev` fails to exclude).
+  const devBlock = pkg['devDependencies'];
+  const removedDevDeps = devBlock && typeof devBlock === 'object' ? Object.keys(devBlock).length : 0;
+  if (removedDevDeps > 0) {
+    delete pkg['devDependencies'];
+    changed = true;
+  }
+
+  if (changed) {
+    await writeFile(pkgPath, JSON.stringify(pkg, null, 2)).catch(() => undefined);
+  }
+  return { strippedProtocolDeps, removedDevDeps };
 }
 
 // npm 7+ rejects unsatisfiable peer dependencies with ERESOLVE and tells you to
@@ -257,13 +347,91 @@ async function findAuditDir(sourceDir: string): Promise<string> {
     queue = next;
   }
 
-  // Prefer the shallowest package dir that already ships a lockfile (npm audit
-  // resolves the graph directly); otherwise fall back to the shallowest one.
-  for (const dir of packageDirs) {
-    if (await hasLockfile(dir)) return dir;
+  // A monorepo ROOT is often just a workspace shell: it declares `workspaces`
+  // and maybe a few lint/build devDeps, but the actual application — and the
+  // dependencies worth auditing — live in a member package (e.g. apps/web). The
+  // root usually owns the only lockfile, so a naive "shallowest dir with a
+  // lockfile" pick would audit the near-empty shell and report a meaningless
+  // pass. So classify each package dir and prefer one that carries a substantial
+  // runtime dependency set, while still preferring a lockfile when the choice is
+  // otherwise equal.
+  const profiles = await Promise.all(
+    packageDirs.map(async (dir) => ({
+      dir,
+      ...(await profilePackageDir(dir)),
+      hasLock: await hasLockfile(dir),
+    })),
+  );
+
+  // Candidates that look like a real app (meaningful dependency count and not a
+  // pure workspace shell). The submission is a deployed WEB preview, so among
+  // app packages we must prefer the web app (Next/Vite/CRA) over a sibling
+  // mobile app (React Native / Expo) — a monorepo's mobile package often has far
+  // MORE deps, so a naive "most deps wins" picks it and audits an irrelevant
+  // (and noisier) dependency tree. Sort: web app first, then mobile last, then
+  // lockfile, then most deps, then shallowest.
+  const realApps = profiles.filter((p) => !p.isWorkspaceShell && p.depCount >= APP_DEP_THRESHOLD);
+  if (realApps.length > 0) {
+    realApps.sort((a, b) =>
+      Number(b.isWebApp) - Number(a.isWebApp) ||
+      Number(a.isMobileApp) - Number(b.isMobileApp) ||
+      Number(b.hasLock) - Number(a.hasLock) ||
+      b.depCount - a.depCount,
+    );
+    return realApps[0]!.dir;
+  }
+
+  // No clear app package — fall back to the original heuristic: shallowest dir
+  // with a lockfile, else the shallowest package dir.
+  for (const p of profiles) {
+    if (p.hasLock) return p.dir;
   }
 
   return packageDirs[0] ?? sourceDir;
+}
+
+// A package dir needs at least this many declared deps to count as a real app
+// (vs. a workspace shell whose only deps are a handful of lint/build tools).
+const APP_DEP_THRESHOLD = 5;
+
+// Web-app frameworks: presence of any of these (as a dep) or a matching build
+// script marks a package as the deployed web app worth auditing for a web
+// submission.
+const WEB_FRAMEWORK_DEPS = new Set(['next', 'vite', 'react-scripts', '@remix-run/react', 'gatsby', '@angular/core', 'vue', 'nuxt', 'astro']);
+const WEB_BUILD_SCRIPT_RE = /\b(next|vite|react-scripts|remix|gatsby|ng|nuxt|astro)\b.*\bbuild\b|\bbuild\b.*\b(next|vite|gatsby|astro)\b|next (build|dev|start)/i;
+// Mobile (React Native / Expo) markers — a package we want to DEPRIORITIZE for a
+// web submission.
+const MOBILE_DEPS = new Set(['expo', 'react-native', '@expo/cli', 'expo-router']);
+
+// Read a package.json and summarize what kind of package it is.
+async function profilePackageDir(dir: string): Promise<{ depCount: number; isWorkspaceShell: boolean; isWebApp: boolean; isMobileApp: boolean }> {
+  const text = await readFile(join(dir, 'package.json'), 'utf8').catch(() => null);
+  if (text === null) return { depCount: 0, isWorkspaceShell: false, isWebApp: false, isMobileApp: false };
+  try {
+    const pkg = JSON.parse(text) as {
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+      scripts?: Record<string, string>;
+      workspaces?: unknown;
+    };
+    const deps = pkg.dependencies ?? {};
+    const devDeps = pkg.devDependencies ?? {};
+    const runtimeDeps = Object.keys(deps).length;
+    const allDeps = runtimeDeps + Object.keys(devDeps).length;
+    // A workspace shell declares `workspaces` and has no runtime dependencies of
+    // its own (only build/lint devDeps, or none) — the real deps live in members.
+    const isWorkspaceShell = pkg.workspaces != null && runtimeDeps === 0;
+
+    const allDepNames = new Set([...Object.keys(deps), ...Object.keys(devDeps)]);
+    const scriptValues = Object.values(pkg.scripts ?? {}).join(' ; ');
+    const isWebApp =
+      [...WEB_FRAMEWORK_DEPS].some((d) => allDepNames.has(d)) || WEB_BUILD_SCRIPT_RE.test(scriptValues);
+    const isMobileApp = [...MOBILE_DEPS].some((d) => allDepNames.has(d));
+
+    return { depCount: allDeps, isWorkspaceShell, isWebApp, isMobileApp };
+  } catch {
+    return { depCount: 0, isWorkspaceShell: false, isWebApp: false, isMobileApp: false };
+  }
 }
 
 async function hasLockfile(dir: string): Promise<boolean> {
