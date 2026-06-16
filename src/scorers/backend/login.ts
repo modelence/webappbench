@@ -267,23 +267,47 @@ const SOCIAL_BUTTON_RE = /google|github|gitlab|apple|microsoft|facebook|twitter|
 
 // Click the form's submit button. Filters out social/OAuth buttons by their
 // visible text so a "Continue with Google" button next to a bare "Continue"
-// doesn't hijack the submit. Tries text-named submit buttons first, then
-// type=submit, then any non-social button, then Enter as a last resort.
+// doesn't hijack the submit.
+//
+// Order matters: an IN-FORM submit control is tried first because a text-named
+// heuristic alone is ambiguous — apps frequently render a decorative "Sign in"
+// toggle in the top nav (a tab/dropdown opener, type=button, outside the form)
+// that sits BEFORE the real in-form "Sign in" submit in DOM order. Clicking the
+// toggle no-ops the submit and leaves the page on the login screen (this is
+// exactly why the Manus CRM failed F7/F8). So: in-form submit/named control
+// first, then a page-wide type=submit, then the text-named heuristic, then any
+// non-social button, then Enter.
 async function submit(page: Page): Promise<void> {
-  const named = page.getByRole('button', { name: /log ?in|sign ?in|continue|submit|next/i });
-  const namedCount = await named.count().catch(() => 0);
-  for (let i = 0; i < namedCount; i++) {
-    const btn = named.nth(i);
+  // 1) The form's OWN submit control — a type=submit button or a named button
+  //    inside a <form>. This is the most reliable signal and can't match a
+  //    nav-level toggle that lives outside the form.
+  const inForm = page
+    .locator('form button[type="submit"]')
+    .or(page.locator('form').getByRole('button', { name: /log ?in|sign ?in|continue|submit|next/i }));
+  const inFormCount = await inForm.count().catch(() => 0);
+  for (let i = 0; i < inFormCount; i++) {
+    const btn = inForm.nth(i);
     const text = await btn.innerText().catch(() => '');
     if (SOCIAL_BUTTON_RE.test(text)) continue;
     await btn.click().catch(() => undefined);
     return;
   }
-  // type=submit buttons, skipping any whose text reads as social.
+  // 2) Any type=submit button on the page, skipping any whose text reads social.
   const submitTyped = page.locator('button[type="submit"]');
   const submitCount = await submitTyped.count().catch(() => 0);
   for (let i = 0; i < submitCount; i++) {
     const btn = submitTyped.nth(i);
+    const text = await btn.innerText().catch(() => '');
+    if (SOCIAL_BUTTON_RE.test(text)) continue;
+    await btn.click().catch(() => undefined);
+    return;
+  }
+  // 3) Text-named buttons anywhere on the page (last resort before "any button"),
+  //    skipping social. Reached only when no in-form/type=submit control exists.
+  const named = page.getByRole('button', { name: /log ?in|sign ?in|continue|submit|next/i });
+  const namedCount = await named.count().catch(() => 0);
+  for (let i = 0; i < namedCount; i++) {
+    const btn = named.nth(i);
     const text = await btn.innerText().catch(() => '');
     if (SOCIAL_BUTTON_RE.test(text)) continue;
     await btn.click().catch(() => undefined);

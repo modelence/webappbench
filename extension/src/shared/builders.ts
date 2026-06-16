@@ -6,6 +6,7 @@ import { parseReplitConversation } from './replit-parse.js';
 import { parseV0Conversation } from './v0-parse.js';
 import { parseBoltConversation } from './bolt-parse.js';
 import { parseEmergentConversation } from './emergent-parse.js';
+import { parseManusConversation } from './manus-parse.js';
 
 export const BUILDERS: readonly BuilderDef[] = [
   {
@@ -93,6 +94,21 @@ export const BUILDERS: readonly BuilderDef[] = [
     // shown in the UI's Run Details, so credits pass through at $0.20 each.
     creditToUsd: 0.2,
     creditRateNote: 'Monthly billing: $0.20/credit ($20 / 100). Credits = the job\'s "Credits Spent".',
+  },
+  {
+    id: 'manus',
+    label: 'Manus',
+    hosts: ['manus.im'],
+    contentScripts: [
+      { file: 'src/content/manus.js', world: 'ISOLATED' },
+      { file: 'src/content/manus-main.js', world: 'MAIN' },
+    ],
+    parser: parseManusConversation,
+    // Manus prices credits at ~$0.01 each (flat across plans, e.g. Starter
+    // $19 / 1,900 credits). The session's costedCredits is exactly the build's
+    // "Credits used" in the usage panel, so cost = credits × $0.01.
+    creditToUsd: 0.01,
+    creditRateNote: 'Monthly billing: ~$0.01/credit (e.g. $19 / 1,900). Credits = the build\'s "Credits used".',
   },
 ];
 
