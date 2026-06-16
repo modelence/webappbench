@@ -19,7 +19,9 @@
     "https://*.v0.dev/*",
     "https://bolt.new/*",
     "https://app.emergent.sh/*",
-    "https://*.emergent.sh/*"
+    "https://*.emergent.sh/*",
+    "https://manus.im/*",
+    "https://*.manus.im/*"
   ],
   "icons": {
     "16": "icons/icon-16.png",
@@ -99,6 +101,17 @@
     {
       "matches": ["https://app.emergent.sh/*"],
       "js": ["src/content/emergent-main.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
+    {
+      "matches": ["https://manus.im/*", "https://*.manus.im/*"],
+      "js": ["src/content/manus.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://manus.im/*", "https://*.manus.im/*"],
+      "js": ["src/content/manus-main.js"],
       "world": "MAIN",
       "run_at": "document_start"
     }
