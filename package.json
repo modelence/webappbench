@@ -1,6 +1,6 @@
 {
   "name": "webappbench",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Reproducible open-source benchmark for AI sitebuilder products",
   "type": "module",
   "license": "Apache-2.0",

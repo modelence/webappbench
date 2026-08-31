@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --experimental-strip-types .probe2.mjs)"
+    ]
+  }
+}

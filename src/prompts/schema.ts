@@ -12,6 +12,12 @@ const setupActionSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('reload') }),
   z.object({ kind: z.literal('waitFor'), locator: z.string().min(1) }),
   z.object({ kind: z.literal('revealLoginForm') }),
+  // Sign in using the submission's `backend` credentials (default: user A).
+  // A no-op that leaves the criterion failing when the submission carries no
+  // backend block, so auth-gated criteria simply don't pass on non-backend runs
+  // rather than erroring the whole scorer.
+  z.object({ kind: z.literal('login'), account: z.enum(['a', 'b']).optional() }),
+  z.object({ kind: z.literal('logout') }),
 ]);
 
 const acceptanceCriterionSchema = z.object({

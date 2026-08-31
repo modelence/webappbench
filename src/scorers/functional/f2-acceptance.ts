@@ -1,9 +1,19 @@
 import type { Locator, Page } from '@playwright/test';
 import type { AcceptanceCriterion, SetupAction } from '../../core/types.ts';
+import type { Account } from '../../core/backend.ts';
 import type { ScorerContext, ScorerResult } from '../types.ts';
-import { revealLoginForm } from '../backend/login.ts';
+import { revealLoginForm, login, logout } from '../backend/login.ts';
 
-export const F2_VERSION = '0.3.0';
+// Credentials available to `login` setup actions, or null on a submission with
+// no backend block (auth-gated criteria then fail rather than throw).
+interface SetupAccounts {
+  a: Account;
+  b: Account;
+}
+
+// 0.4.0 — adds the `login` / `logout` setup actions, enabling auth-gated
+// acceptance criteria against the authenticated dashboard.
+export const F2_VERSION = '0.4.0';
 
 const VISIBILITY_TIMEOUT_MS = 5_000;
 // Used by setup actions (fill/click/press/waitFor) — same budget as
@@ -27,11 +37,15 @@ export async function runF2(ctx: ScorerContext): Promise<ScorerResult> {
   const outcomes: CriterionOutcome[] = [];
 
   const url = ctx.submission.artifactUrl;
+  const backend = ctx.submission.backend;
+  const accounts: SetupAccounts | null = backend
+    ? { a: backend.userA, b: backend.userB }
+    : null;
   for (const c of ctx.prompt.mustHave) {
-    outcomes.push(await evalCriterion(ctx.page, c, 'must', url));
+    outcomes.push(await evalCriterion(ctx.page, c, 'must', url, accounts));
   }
   for (const c of ctx.prompt.shouldHave) {
-    outcomes.push(await evalCriterion(ctx.page, c, 'should', url));
+    outcomes.push(await evalCriterion(ctx.page, c, 'should', url, accounts));
   }
 
   const mustTotal = ctx.prompt.mustHave.length;
@@ -66,10 +80,11 @@ async function evalCriterion(
   c: AcceptanceCriterion,
   kind: 'must' | 'should',
   url: string,
+  accounts: SetupAccounts | null,
 ): Promise<CriterionOutcome> {
   try {
     if (c.setup && c.setup.length > 0) {
-      const setupErr = await runSetup(page, c.setup, url);
+      const setupErr = await runSetup(page, c.setup, url, accounts);
       if (setupErr) {
         return { id: c.id, kind, passed: false, note: `setup failed: ${setupErr}` };
       }
@@ -99,12 +114,17 @@ async function evalCriterion(
 // Runs setup actions sequentially against the page. Returns an error string
 // describing the first action that failed, or null on success. Used by stateful
 // prompts to drive the page into a specific state before the locator runs.
-async function runSetup(page: Page, actions: SetupAction[], url: string): Promise<string | null> {
+async function runSetup(
+  page: Page,
+  actions: SetupAction[],
+  url: string,
+  accounts: SetupAccounts | null,
+): Promise<string | null> {
   for (let i = 0; i < actions.length; i++) {
     const action = actions[i]!;
     const label = `step ${i + 1} (${action.kind})`;
     try {
-      await runSetupStep(page, action, url);
+      await runSetupStep(page, action, url, accounts);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return `${label}: ${msg.slice(0, 200)}`;
@@ -113,7 +133,12 @@ async function runSetup(page: Page, actions: SetupAction[], url: string): Promis
   return null;
 }
 
-async function runSetupStep(page: Page, action: SetupAction, url: string): Promise<void> {
+async function runSetupStep(
+  page: Page,
+  action: SetupAction,
+  url: string,
+  accounts: SetupAccounts | null,
+): Promise<void> {
   switch (action.kind) {
     case 'evaluate': {
       // The expression is passed as a string so prompt authors can write
@@ -165,6 +190,29 @@ async function runSetupStep(page: Page, action: SetupAction, url: string): Promi
       // button at `/` and the form at /login). No-op when the form is already
       // on the page. Shared with the F7/F8/S4 login driver.
       await revealLoginForm(page, url);
+      return;
+    }
+    case 'login': {
+      // Authenticate so a criterion can assert against the logged-in dashboard.
+      // Reuses the F7/F8/S4 driver, so it inherits the splash/staged-form/OTP
+      // handling and the per-account session cache (later logins in the same
+      // run replay the cached session instead of re-driving the form).
+      if (!accounts) {
+        throw new Error('login setup requires a `backend` block on the submission');
+      }
+      const account = action.account === 'b' ? accounts.b : accounts.a;
+      const outcome = await login(page, url, account);
+      if (!outcome.ok) {
+        throw new Error(`login failed: ${outcome.reason ?? 'unknown reason'}`);
+      }
+      return;
+    }
+    case 'logout': {
+      // Click the app's own log-out control. Throws when no such control
+      // exists, which is itself the finding for a "log out is present" check.
+      const ok = await logout(page);
+      if (!ok) throw new Error('no log-out control found on the page');
+      await page.waitForLoadState('networkidle', { timeout: 8_000 }).catch(() => undefined);
       return;
     }
   }

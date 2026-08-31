@@ -66,14 +66,65 @@ must_have:
     locator: "locator('input[type=\"password\"]')"
     assert: "toHaveCountAtLeast(1)"
 
-# F2 covers only the logged-out surface (it has no login driver). The
-# authenticated views — empty-state copy, the new-contact form, the log-out
-# control, and contact persistence — are exercised by the backend-track scorers
-# instead: F7 logs in, creates a contact, logs out, logs back in and confirms it
-# persists; F8 confirms cross-session persistence; S4 confirms per-user
-# isolation. So this prompt declares no should_have here rather than carrying
-# auth-gated criteria that F2 can never satisfy.
-should_have: []
+# Authenticated surface. These use the `login` setup action (added in F2 v0.4.0),
+# which reuses the F7/F8/S4 login driver — so they inherit its splash /
+# staged-form / OTP handling and its per-account session cache (only the first
+# login drives the form; the rest replay the cached session).
+#
+# They are should_have, not must_have, deliberately: they depend on a live login
+# against a third-party deployment, so an expired URL or a flaky sign-in should
+# cost partial credit rather than zero out 21% of the composite. On a submission
+# with no `backend` block the login step fails and these simply don't pass,
+# which is the correct outcome for a non-backend run.
+#
+# Each criterion re-runs `login` in setup. That is intentional: F2 evaluates
+# criteria sequentially against one shared page whose state prior criteria have
+# already mutated (the must_have checks clear storage and reload to the logged-out
+# screen), so every auth-gated criterion must re-establish its own state rather
+# than assume the previous one left it signed in.
+should_have:
+  # 1. The log-out control the prompt explicitly requires.
+  - id: logout_control_present
+    setup:
+      - kind: login
+    locator: "getByRole('button', { name: /log ?out|sign ?out/i }).or(getByRole('link', { name: /log ?out|sign ?out/i }))"
+    assert: "toHaveCountAtLeast(1)"
+
+  # 2. The "Rolodex" wordmark in the top bar of the authenticated app. F6 checks
+  #    this string in the SOURCE; this confirms it actually renders in the app.
+  - id: wordmark_visible_when_authenticated
+    setup:
+      - kind: login
+    locator: "getByText(/Rolodex/i)"
+    assert: "toBeVisible"
+
+  # 3-5. The new-contact form's three required fields. Anchored on input TYPE and
+  #      label/placeholder the same way the shared createContact() driver locates
+  #      them, so a form that passes here is one the driver can actually fill.
+  - id: new_contact_name_field
+    setup:
+      - kind: login
+    locator: "getByLabel(/name/i).or(getByPlaceholder(/name/i)).or(locator('input[name=\"name\" i]'))"
+    assert: "toHaveCountAtLeast(1)"
+
+  - id: new_contact_email_field
+    setup:
+      - kind: login
+    locator: "locator('input[type=\"email\"]').or(getByLabel(/e-?mail/i)).or(getByPlaceholder(/e-?mail/i))"
+    assert: "toHaveCountAtLeast(1)"
+
+  - id: new_contact_company_field
+    setup:
+      - kind: login
+    locator: "getByLabel(/company|organization|organisation/i).or(getByPlaceholder(/company|organization|organisation/i))"
+    assert: "toHaveCountAtLeast(1)"
+
+  # 6. A submit control for the new-contact form.
+  - id: new_contact_submit_control
+    setup:
+      - kind: login
+    locator: "locator('form button[type=\"submit\"]').or(getByRole('button', { name: /add contact|create contact|save contact/i }))"
+    assert: "toHaveCountAtLeast(1)"
 
 verbatim_constraints:
   - type: exact_copy

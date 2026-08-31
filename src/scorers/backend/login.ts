@@ -74,12 +74,36 @@ function hasCachedSession(account: Account): boolean {
 // True when the page currently shows the authenticated dashboard — detected
 // POSITIVELY by its own controls (logout, create-contact affordance, list/empty
 // markers), never by mere absence of a splash (a 404 also lacks the splash).
+//
+// A visible password field DISQUALIFIES the page outright. This guard matters
+// because login screens routinely carry dashboard-sounding copy that the marker
+// regexes below would otherwise match:
+//   - Manus renders the tagline "Your contacts are private and only visible to
+//     you." on the LOGIN page — matching /your contacts/i.
+//   - Emergent renders "Sign in to access your contacts." plus a "Create an
+//     account" button — matching /your contacts/i and /create/i.
+// Without the guard, isOnDashboard() returns true on the logged-out login
+// screen, so classifyAfterSubmit() reports `loggedIn` ~25ms after submit —
+// before the auth request even resolves — and F7/F8/S4 then run against the
+// login form instead of the app. That is exactly what depressed Emergent's F7
+// (0.33) and stranded Manus's S4 in the June run.
+//
+// The affordance regexes are also anchored: a bare /add|create|save/ alternation
+// matches a login page's "Create account" / "Sign up" button, so each verb is
+// tied to the contact noun it must accompany.
 async function isOnDashboard(page: Page): Promise<boolean> {
+  const hasPassword = await page
+    .locator('input[type="password"]')
+    .count()
+    .then((c) => c > 0)
+    .catch(() => false);
+  if (hasPassword) return false;
+
   const markers = page
     .getByRole('button', { name: /log ?out|sign ?out/i })
     .or(page.getByRole('link', { name: /log ?out|sign ?out/i }))
-    .or(page.getByRole('button', { name: /add contact|new contact|add|create|save/i }))
-    .or(page.getByText(/new contact|add contact|no contacts yet|your contacts|directory/i));
+    .or(page.getByRole('button', { name: /(add|new|create) contact/i }))
+    .or(page.getByText(/no contacts yet|add your first contact/i));
   return markers.count().then((c) => c > 0).catch(() => false);
 }
 

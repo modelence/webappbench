@@ -55,7 +55,9 @@ export type SetupAction =
   | { kind: 'press'; locator: string; key: string }          // pressing a keyboard key
   | { kind: 'reload' }                                        // page.reload()
   | { kind: 'waitFor'; locator: string }                     // wait for locator to be visible
-  | { kind: 'revealLoginForm' };                             // click through a splash to the login form
+  | { kind: 'revealLoginForm' }                              // click through a splash to the login form
+  | { kind: 'login'; account?: 'a' | 'b' }                   // sign in with the submission's backend credentials
+  | { kind: 'logout' };                                      // click the app's log-out control
 
 export interface VerbatimConstraint {
   type: 'exact_copy' | 'hex_value' | 'structural';
